@@ -6,13 +6,58 @@
 
 ## 安装
 
+一键安装（检查 Node / Python / guands / guancli → `npm install` → `npm link` → 自检）：
+
+| 系统 | 命令 |
+|---|---|
+| macOS / Linux | `./install.sh`（加 `--crawl` 装完立即抓取） |
+| Windows | 双击 `install.cmd`，或 `install.cmd --crawl` |
+
+脚本不会自动安装 Node / Python，缺失时会给出安装命令。手动安装：
+
 ```bash
-cd /home/itcmx/project/guan-lineage
+cd guan-lineage        # 仓库根目录
 npm install
 npm link            # 全局命令 guanlineage
 ```
 
-依赖：Node ≥ 22.13（内置 `node:sqlite`）、Python 3、已登录的 `guands` / `guancli`。
+## 依赖
+
+| 依赖 | 版本 | 用途 | 何时需要 |
+|---|---|---|---|
+| Node.js | ≥ 22.13 | CLI、GraphQL、页面服务（内置 `node:sqlite`） | 始终 |
+| Python | ≥ 3.8（仅标准库） | 抓取与字段血缘推导（`crawler/`） | `crawl`、`rebuild-fields` |
+| `guancli` / `guands` | 已验证 guancli 1.0.66、guands 0.1.37 | 调用观远 BI 接口读取资源 | 仅 `crawl` |
+| npm 包 `graphql` | 16.9.0 | GraphQL 执行 | 始终（`npm install` 安装） |
+
+查询命令（`stats` / `search` / `lineage` / `explain` / `serve` 等）只读本地 `data/lineage.db`，不需要 `guancli` / `guands`，也不访问观远。没有抓取条件的机器可以直接拷贝别处抓好的 `data/` 目录使用。
+
+### guancli / guands
+
+二者是观远官方命令行工具，通过 npm 包 `@guandata/guanskill` 一并安装（同时会装 guanetl、guanwf 等，本项目用不到）：
+
+```bash
+npm install -g --foreground-scripts @guandata/guanskill
+guancli auth login        # 交互式配置 BI 地址与登录方式，多环境时用 guancli auth use <环境> 切换
+guancli status            # 确认「API 连接正常」
+```
+
+- **认证**：由 `guancli` 统一管理，`guands` 复用 `guancli` 的当前环境。抓取时临时切换环境可设 `GUANCLI_PROFILE=<环境> guanlineage crawl`。本项目不读取、不保存任何凭据。
+- **权限**：抓取结果以登录账号在 BI 中的可见范围为准。账号看不到的数据集、ETL、页面不会入库，相关血缘会缺失，建议使用可见全部资源的账号抓取。
+- **调用的命令**（全部为只读查询，见 `crawler/crawl.py`）：
+
+  | 命令 | 取得的数据 |
+  |---|---|
+  | `guands dataset list --limit N --offset M --raw` | 数据集清单（分页） |
+  | `guands dataset cards <数据集ID> --raw` | 使用该数据集的卡片 |
+  | `guancli ds get <数据集ID> --raw` | 数据集详情、字段、上游来源 |
+  | `guancli etl get <ETL ID> --raw` | ETL 算子 DAG（缓存到 `data/cache/etl/`） |
+  | `guancli page get <页面ID> --raw` | 页面卡片配置（缓存到 `data/cache/page/`） |
+
+- **兼容性**：解析依赖上述命令 `--raw` 输出的 JSON 结构。升级 `@guandata/guanskill` 后如抓取报错或字段血缘明显变少，先用 `guanlineage stats` 看抓取错误数，再对照原始输出检查结构是否变化。
+- **耗时与失败**：默认 6 并发，全量约 8 分钟（`--workers` 可调）。命令返回非零或输出不是 JSON 时重试 2 次；单次调用超过 180 秒不再重试。仍失败的资源记入 `crawl_errors`（`guanlineage stats` 的「抓取错误」），不中断整体抓取。
+
+支持 Windows、macOS、Linux。Python 按 `py -3` / `python` / `python3` 顺序自动查找（非 Windows 为 `python3` / `python`），也可用环境变量 `GUAN_LINEAGE_PYTHON` 指定解释器路径。Windows 上抓取结束时如 `guanlineage serve` 正在运行，数据库文件被占用无法替换，需先停止服务。
 
 ## 快速开始
 
@@ -28,7 +73,7 @@ guanlineage stats
 |---|---|
 | `crawl [--workers 6] [--limit N]` | 全量抓取（只读），结束后推导字段血缘 |
 | `rebuild-fields` | 基于缓存的 ETL / 页面配置重算字段血缘（秒级） |
-| `serve [--port 4000]` | 关系图页面与 GraphQL |
+| `serve [--port 4000] [--host 127.0.0.1]` | 关系图页面与 GraphQL；默认仅本机访问，局域网共享用 `--host 0.0.0.0`（无鉴权） |
 | `stats` | 抓取时间与统计 |
 | `search <关键字> [--type DATASET\|ETL\|CARD\|PAGE\|SOURCE\|FIELD]` | 按名称搜索资源或字段 |
 | `show <资源>` | 资源详情 |

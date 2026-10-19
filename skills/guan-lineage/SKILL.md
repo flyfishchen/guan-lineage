@@ -5,7 +5,7 @@ description: 查询观远 BI（Guandata）的资源血缘与字段血缘 —— 
 
 # guan-lineage：观远血缘查询
 
-本地血缘库由 `guanlineage crawl` 只读抓取观远生成（SQLite），查询不访问观远、无副作用。项目：`/home/itcmx/project/guan-lineage`。
+本地血缘库由 `guanlineage crawl` 只读抓取观远生成（SQLite），查询不访问观远、无副作用。`guanlineage` 为全局命令（在仓库根目录 `npm link` 安装），可在任意目录运行；数据默认位于仓库 `data/`，可用环境变量 `GUAN_LINEAGE_DATA` 指定。
 
 ## 先确认数据新鲜度
 

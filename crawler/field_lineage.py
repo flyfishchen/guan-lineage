@@ -342,7 +342,7 @@ def prune_selector_only_pages(db, page_dir):
     n = 0
     for p in Path(page_dir).glob("*.json"):
         try:
-            page = json.loads(p.read_text()).get("data") or {}
+            page = json.loads(p.read_text(encoding="utf-8")).get("data") or {}
         except json.JSONDecodeError:
             continue
         sel, other = set(), set()
@@ -398,7 +398,7 @@ def build_card_edges(db, page_dir, ds_fields):
         if p.stem.endswith("_draft"):
             continue
         try:
-            page = json.loads(p.read_text()).get("data") or {}
+            page = json.loads(p.read_text(encoding="utf-8")).get("data") or {}
         except json.JSONDecodeError:
             continue
         pg_id = page.get("pgId") or p.stem
@@ -444,7 +444,7 @@ def build(db_path, cache_dir, page_dir=None):
         if etl_id not in etl_ids:  # 缓存里可能有已删除的 ETL
             continue
         try:
-            etl = json.loads(p.read_text()).get("data") or {}
+            etl = json.loads(p.read_text(encoding="utf-8")).get("data") or {}
         except json.JSONDecodeError:
             continue
         for out_ds, out_cols in etl_columns(etl, ds_fields):

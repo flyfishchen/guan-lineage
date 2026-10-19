@@ -27,7 +27,7 @@ guanlineage stats && guanlineage explain s132435b02e7a485780fff4c 集采/地采 
 - `crawler/field_lineage.py`：解析 ETL 算子 DAG（`etl_columns`，每个算子类型一个分支）推导「输出列 ← 输入数据集字段」，SQL 算子用 `sql_columns` 启发式解析；解析页面卡片配置得到「字段 → 卡片」边，并补齐「数据集 → 卡片」接口漏掉的卡片节点、剔除仅被筛选器使用的「数据集 → 页面」边。结果写 `field_edges`（每次 DROP 重建）。
 - `src/graph.mjs`：`createGraph()` 内含 GraphQL schema（`buildSchema` SDL）与全部 resolver，CLI 与服务共用；数据库以只读打开。
 - `src/server.mjs`：HTTP；`/` 每次请求重新读取 `web/ui.html`（改页面无需重启），`/graphql` 执行查询。
-- `bin/guanlineage.mjs`：CLI，进程内调用 `graph.query()`，不依赖服务；`crawl` / `rebuild-fields` 转调 Python。
+- `bin/guanlineage.mjs`：CLI，进程内调用 `graph.query()`，不依赖服务；`crawl` / `rebuild-fields` 转调 Python（`findPython()` 查找解释器，并设 `PYTHONUTF8=1`）。
 - `web/ui.html`：单文件页面，cytoscape + dagre（CDN）画资源血缘；字段血缘为自绘「表卡片 + SVG 连线」视图（`renderFieldView` / `drawFieldLinks`），两种视图共用顶部工具栏。
 
 数据表：`nodes(id,type,subtype,name,path,props)`、`edges(src,dst,rel)`、`fields(ds_id,fd_id,name=展示名,phys_name,...)`、`field_edges(src_ds,src_field,dst_ds,dst_field,via,kind,transform)`、`crawl_errors`、`meta`。
@@ -45,5 +45,6 @@ guanlineage stats && guanlineage explain s132435b02e7a485780fff4c 集采/地采 
 - 只读：抓取只调用观远的查询接口。本项目不得调用任何写操作（删除、替换数据、保存 ETL 等）。
 - 改 `src/graph.mjs` 或 `src/server.mjs` 后需重启 `guanlineage serve`；改 `web/ui.html` 刷新页面即可；改 `crawler/field_lineage.py` 后运行 `guanlineage rebuild-fields`。
 - 调试抓取时不要对正式数据目录用 `--limit`：抓取会清空并重建 `data/cache/page`，小样本会导致字段→卡片关系缺失。改用临时目录：`GUAN_LINEAGE_DATA=/tmp/x guanlineage crawl --limit 5`。
-- `node:sqlite` 为实验特性，CLI 用 `node --no-warnings` 启动以屏蔽警告；要求 Node ≥ 22.13。
+- `node:sqlite` 为实验特性，CLI 在动态 import `graph.mjs` 前改写 `process.emitWarning` 屏蔽该警告；要求 Node ≥ 22.13。
+- 跨平台（Windows / macOS / Linux）：shebang 只用 `#!/usr/bin/env node`（不用 `env -S`）；路径一律 `path.join` / `pathlib`；Python 读写文件与子进程输出显式 `encoding="utf-8"`；外部命令经 `shutil.which` 解析（Windows 上是 `.cmd`）；SQLite 连接用完即关，否则 Windows 下最后的原子替换会失败。
 - `data/` 不入 git（含 36MB 数据库与缓存）。

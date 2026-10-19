@@ -1,0 +1,4 @@
+# 安装脚本行尾固定：sh 在 Windows 检出后仍可在 WSL / macOS 运行；cmd 需 CRLF
+*.sh  text eol=lf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """抓取观远 BI 全量血缘（数据集 / ETL / 卡片 / 页面），写入 SQLite 图存储。
 
-只读：仅调用 guands dataset list/cards、guancli ds get、guancli etl get。
+只读：仅调用 guands dataset list/cards、guancli ds get、guancli etl get、guancli page get。
 
 用法:
   guanlineage crawl [--workers 6] [--limit N]   （或 python3 crawler/crawl.py）
@@ -12,6 +12,7 @@
 import argparse
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -67,9 +68,11 @@ CREATE INDEX IF NOT EXISTS idx_fields_name ON fields(name);
 
 
 def run(cmd, retries=2):
+    # Windows 上 npm 安装的 guands / guancli 是 .cmd，需经 PATHEXT 解析出完整路径才能直接执行
+    cmd = [shutil.which(cmd[0]) or cmd[0], *cmd[1:]]
     last = None
     for i in range(retries + 1):
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
         if p.returncode == 0:
             try:
                 return json.loads(p.stdout)
@@ -209,7 +212,7 @@ def fetch_page(pg_id):
     r = run(["guancli", "page", "get", pg_id, "--raw"])
     # 缓存原文供 field_lineage.py 解析「字段 -> 卡片」
     PAGE_CACHE.mkdir(parents=True, exist_ok=True)
-    (PAGE_CACHE / f"{pg_id}.json").write_text(json.dumps(r, ensure_ascii=False))
+    (PAGE_CACHE / f"{pg_id}.json").write_text(json.dumps(r, ensure_ascii=False), encoding="utf-8")
     return r
 
 
@@ -217,7 +220,7 @@ def fetch_etl(etl_id):
     r = run(["guancli", "etl", "get", etl_id, "--raw"])
     # 缓存原文供 field_lineage.py 解析字段级血缘
     ETL_CACHE.mkdir(parents=True, exist_ok=True)
-    (ETL_CACHE / f"{etl_id}.json").write_text(json.dumps(r, ensure_ascii=False))
+    (ETL_CACHE / f"{etl_id}.json").write_text(json.dumps(r, ensure_ascii=False), encoding="utf-8")
     return r
 
 
@@ -229,6 +232,7 @@ def main():
     args = ap.parse_args()
 
     tmp = args.db + ".tmp"
+    Path(tmp).parent.mkdir(parents=True, exist_ok=True)
     Path(tmp).unlink(missing_ok=True)
     st = Store(tmp)
     t0 = time.time()
@@ -324,7 +328,9 @@ def main():
     estats = st.db.execute("SELECT rel, count(*) FROM edges GROUP BY rel").fetchall()
     errs = st.db.execute("SELECT count(*) FROM crawl_errors").fetchone()[0]
     st.db.close()
-    pg_ids = [r[0] for r in sqlite3.connect(tmp).execute("SELECT id FROM nodes WHERE type='PAGE' AND id NOT LIKE '%\\_draft' ESCAPE '\\'")]
+    conn = sqlite3.connect(tmp)
+    pg_ids = [r[0] for r in conn.execute("SELECT id FROM nodes WHERE type='PAGE' AND id NOT LIKE '%\\_draft' ESCAPE '\\'")]
+    conn.close()  # Windows 下未关闭的连接会使最后的文件替换失败
     print(f"[4/5] 抓取 {len(pg_ids)} 个页面的卡片配置", file=sys.stderr)
     for f in PAGE_CACHE.glob("*.json") if PAGE_CACHE.exists() else []:
         f.unlink()  # 清掉旧缓存，避免已删除页面残留
@@ -342,7 +348,11 @@ def main():
     print("[5/5] 推导字段级血缘", file=sys.stderr)
     total, kinds, (n, hit) = field_lineage.build(tmp, ETL_CACHE, PAGE_CACHE)
     print(f"  field_edges={total} {kinds} 产出字段覆盖 {hit or 0}/{n}", file=sys.stderr)
-    Path(tmp).replace(args.db)
+    try:
+        Path(tmp).replace(args.db)
+    except PermissionError:
+        # Windows 不允许替换被打开的文件
+        sys.exit(f"无法替换 {args.db}：文件被占用（如正在运行的 guanlineage serve），关闭后将 {tmp} 改名为 {args.db} 即可，无需重抓")
     print(f"完成 {time.time() - t0:.0f}s  nodes={stats} edges={estats} errors={errs}", file=sys.stderr)
 
 

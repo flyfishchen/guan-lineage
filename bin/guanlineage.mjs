@@ -1,8 +1,17 @@
-#!/usr/bin/env -S node --no-warnings
+#!/usr/bin/env node
 // guanlineage：观远 BI 血缘图命令行。查询直接读本地 SQLite（无需启动服务）。
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { createGraph, ROOT, DATA_DIR } from '../src/graph.mjs';
+
+// 屏蔽 node:sqlite 的实验特性警告。不用 shebang 的 `env -S node --no-warnings`：
+// Windows 的 npm 命令包装与部分 Linux 的 env 不支持 -S。须在加载 graph.mjs 之前设置，故下面用动态 import
+const emitWarning = process.emitWarning;
+process.emitWarning = (w, ...a) => {
+  const type = typeof a[0] === 'string' ? a[0] : a[0]?.type;
+  if (type === 'ExperimentalWarning' && /SQLite/i.test(String(w?.message ?? w))) return;
+  return emitWarning.call(process, w, ...a);
+};
+const { createGraph, ROOT, DATA_DIR } = await import('../src/graph.mjs');
 
 
 const HELP = `guanlineage — 观远 BI 数据集 / ETL / 卡片 / 页面 / 字段 血缘
@@ -12,7 +21,7 @@ const HELP = `guanlineage — 观远 BI 数据集 / ETL / 卡片 / 页面 / 字�
 数据
   crawl [--workers 6] [--limit N]     全量抓取（只读调用 guands/guancli），完成后自动推导字段血缘
   rebuild-fields                       基于缓存的 ETL / 页面配置重算字段血缘（秒级）
-  serve [--port 4000]                  启动关系图页面与 GraphQL（/ 与 /graphql）
+  serve [--port 4000] [--host 127.0.0.1]  启动关系图页面与 GraphQL（/ 与 /graphql）；默认仅本机
   stats                                抓取时间与节点、边、字段统计
 
 资源
@@ -63,8 +72,20 @@ if (!cmd || cmd === 'help' || opts.help || opts.h) {
 }
 
 // ---------- 不需要数据库的命令 ----------
+// Python 解释器：GUAN_LINEAGE_PYTHON 优先；Windows 通常只有 py / python，macOS 与 Linux 为 python3
+function findPython() {
+  const env = process.env.GUAN_LINEAGE_PYTHON;
+  const cands = env ? [[env]] : process.platform === 'win32' ? [['py', '-3'], ['python'], ['python3']] : [['python3'], ['python']];
+  for (const [cmd, ...pre] of cands) {
+    const r = spawnSync(cmd, [...pre, '-c', 'import sys; sys.exit(sys.version_info < (3, 8))'], { stdio: 'ignore' });
+    if (r.status === 0) return [cmd, ...pre];
+  }
+  die(`找不到 Python 3（已尝试 ${cands.map((c) => c.join(' ')).join(' / ')}）；可用环境变量 GUAN_LINEAGE_PYTHON 指定解释器路径`);
+}
 const py = (script, extra) => {
-  const r = spawnSync('python3', [path.join(ROOT, 'crawler', script), ...extra], { stdio: 'inherit', env: process.env });
+  const [cmd, ...pre] = findPython();
+  // PYTHONUTF8：Windows 中文系统默认 GBK，统一按 UTF-8 读写缓存与子进程输出
+  const r = spawnSync(cmd, [...pre, path.join(ROOT, 'crawler', script), ...extra], { stdio: 'inherit', env: { ...process.env, PYTHONUTF8: '1' } });
   process.exit(r.status ?? 1);
 };
 if (cmd === 'crawl') {
@@ -77,7 +98,7 @@ if (cmd === 'crawl') {
 if (cmd === 'rebuild-fields') py('field_lineage.py', opts.db ? ['--db', String(opts.db)] : []);
 if (cmd === 'serve') {
   const { serve } = await import('../src/server.mjs');
-  serve({ port: Number(opts.port || process.env.PORT || 4000), dbPath: opts.db });
+  serve({ port: Number(opts.port || process.env.PORT || 4000), host: String(opts.host || '127.0.0.1'), dbPath: opts.db });
   await new Promise(() => {});
 }
 
