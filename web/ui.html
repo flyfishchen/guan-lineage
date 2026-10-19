@@ -351,7 +351,7 @@ async function renderDetail(id, field) {
       ${n.fields.map((f) => `<div class="cf-item fd-item${field && f.name === field ? ' hit' : ''}" data-f="${esc(f.name)}" data-k="${esc((f.name || '') + ' ' + (f.annotation || '')).toLowerCase()}">
         <div class="cf-top">
           <span class="cf-name">${esc(f.name)}${f.hidden ? ' <span class="muted">(隐藏)</span>' : ''}</span>
-          <span class="fd-tags">${f.calcType && f.calcType !== 'normal' ? '<span class="cf-zone calc">计算</span>' : ''}<span class="cf-zone">${f.fdType || ''} · ${f.metaType === 'METRIC' ? '度量' : '维度'}</span></span>
+          <span class="fd-tags">${f.calcType && f.calcType !== 'normal' ? '<span class="cf-zone calc">计算</span>' : ''}<span class="cf-zone">${f.fdType || ''} · ${META_CN(f.metaType)}</span></span>
         </div>
         ${f.annotation ? `<div class="pm fd-note">${esc(f.annotation)}</div>` : ''}
         ${f.expr ? `<div class="cf-expr" title="点击展开 / 收起">${esc(f.expr)}</div>` : ''}
@@ -516,7 +516,7 @@ async function renderFieldView() {
         const m = multi.get(k);
         return `<div class="fv-row${k === root ? ' root' : ''}${onPath.has(k) ? ' path' : ''}${ctx.has(k) ? ' ctx' : ''}" data-k="${esc(k)}" data-ds="${id}" data-f="${esc(f.name)}"
           title="${ctx.has(k) ? '参与计算的其它输入（未继续展开）' : ''}">
-          <span>${m ? '<i class="fv-f">ƒ</i>' : ''}${esc(f.name)}</span><span class="fv-t">${ctx.has(k) ? '参与计算' : f.metaType === 'METRIC' ? '度量' : f.fdType || ''}</span></div>`;
+          <span>${m ? '<i class="fv-f">ƒ</i>' : ''}${esc(f.name)}</span><span class="fv-t">${ctx.has(k) ? '参与计算' : f.metaType === 'METRIC' || f.metaType === 'PARAM' ? META_CN(f.metaType) : f.fdType || ''}</span></div>`;
       }).join('')}</div>`;
   }).join('')}${hidden.size ? `<button class="ghost fv-more">还有 ${hidden.size} 张卡片，展开</button>` : ''}</div>`;
   }).join('');
@@ -779,7 +779,7 @@ async function showFieldDetail(ds, name, x = innerWidth / 2, y = innerHeight / 3
       <div class="ph">${f.calcType && f.calcType !== 'normal' || (f.upstream || []).some((e) => e.kind !== 'direct' && e.kind !== 'view') ? '<span class="fv-f">ƒ</span>' : ''}${esc(f.name)}</div>
       <div class="pm"><span class="tag" style="background:${color(isCard ? 'CARD' : 'DATASET')}">${isCard ? '卡片' : '数据集'}</span>${esc(f.dataset?.name || ds)}</div>
       <dl class="meta">
-        ${f.fdType ? `<dt>类型</dt><dd>${f.fdType} · ${f.metaType === 'METRIC' ? '度量' : '维度'}${f.calcType && f.calcType !== 'normal' ? ' · 计算字段' : ''}</dd>` : ''}
+        ${f.fdType ? `<dt>类型</dt><dd>${f.fdType} · ${META_CN(f.metaType)}${f.calcType && f.calcType !== 'normal' ? ' · 计算字段' : ''}</dd>` : ''}
         ${f.physName && f.physName !== f.name ? `<dt>物理名</dt><dd class="mono">${esc(f.physName)}</dd>` : ''}
         ${f.annotation ? `<dt>注释</dt><dd>${esc(f.annotation)}</dd>` : ''}
       </dl>
@@ -831,6 +831,7 @@ function showLink(i, x, y) {
   if (e) showFieldDetail(e.dst.dataset.id, e.dst.name, x, y, fid(e.src.dataset.id, e.src.name));
 }
 
+const META_CN = (m) => ({ METRIC: '度量', PARAM: '参数' })[m] || '维度';
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
 cy.on('tap', 'node', (e) => {

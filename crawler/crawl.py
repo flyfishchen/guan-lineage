@@ -263,6 +263,9 @@ def main():
             props["parentDirName"] = data.get("parentDirName")
             st.fields(ds_id, (data.get("columns") or []) + (data.get("virtualColumns") or []))
             props["cron"] = data.get("dataCronInfo")
+            # 直连 / SQL 数据集查询中引用的全局参数，供 field_lineage 建立「全局参数 -> 数据集」边
+            query = ((data.get("config") or {}).get("tableQuery") or {}).get("query") or ""
+            props["queryParams"] = sorted(set(field_lineage.PARAM_REF.findall(query))) or None
             st.db.execute("UPDATE nodes SET props=? WHERE id=?", (json.dumps(props, ensure_ascii=False), ds_id))
             add_lineage(st, ds_id, "DATASET", detail.get("lineage"))
 

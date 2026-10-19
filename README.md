@@ -120,6 +120,7 @@ guanlineage stats
 | `impact <资源> [--depth 10]` | 下游影响分析，按类型汇总 |
 | `path <起点> <终点>` | 最短数据流路径 |
 | `orphans [--type DATASET]` | 无上下游的资源 |
+| `broken [--reason dataset\|field]` | 失效卡片：引用的数据集或字段已不存在，按页面分组 |
 | `sql <ETL>` | ETL 中 SQL 算子全文 |
 | `fields <数据集> [--keyword k]` | 数据集字段 |
 | `field <数据集> <字段> [--dir] [--depth]` | 字段血缘（上游来源 / 下游去向，含卡片） |
@@ -158,6 +159,14 @@ data/                   lineage.db、cache/{etl,page}（不入库）
 | `USED_BY` | 数据集 → 卡片（图表 / 钻取，不含选择器） |
 | `ON_PAGE` | 卡片 → 页面 |
 | `USED_BY_PAGE` | 数据集 → 页面（观远血缘接口，已剔除仅被筛选器使用的） |
+| `PARAM_OF` | 全局参数 → 数据集（计算字段或查询 SQL 引用了参数） |
+
+**全局参数**作为虚拟数据集 `GLOBAL_PARAMS`（名称「全局参数」）入图，每个参数是它的一个字段（类型、默认值、可选值记在字段注释中），由公式与数据集 SQL 中的 `[DYNAMIC_PARAMS.参数名]` 推导：
+
+- 字段级：参数 → 引用它的数据集计算字段（`calc`）、卡片字段（`card`，含卡片内计算字段展开）。
+- 资源级：全局参数 → 数据集（`PARAM_OF`）、卡片（`USED_BY`）、页面（`USED_BY_PAGE`）。
+- 只在数据集查询 SQL（多为 WHERE 条件）中使用的参数只有资源级边：参数只过滤行，不产生某个具体字段。
+- 资源级 `impact 全局参数` 会经数据集继续传递到下游 ETL，对「只有某个计算字段用了参数」的数据集偏宽；精确影响看字段级：`guanlineage field 全局参数 <参数> --dir down`。
 
 字段血缘 `field_edges(src_ds, src_field, dst_ds, dst_field, via, kind, transform)`：
 
@@ -176,3 +185,4 @@ data/                   lineage.db、cache/{etl,page}（不入库）
 - SQL 算子为启发式解析（select 列表 + 别名回溯），复杂 SQL 可能漏连或多连。
 - 卡片关系来自页面配置，选择器类卡片不纳入血缘。页面草稿（`_draft`）及只存在于草稿中的卡片不入图，只反映已发布的页面。
 - 指标平台、ChatBI、填报、工作流对数据集的引用未抓取，`orphans` 结果用于清理前需人工确认。
+- `broken` 的「数据集不存在」无法区分数据集已删除还是抓取账号无权限；「字段不存在」按字段 ID 与名称都对不上判定，以观远中打开卡片的实际报错为准。常量度量、全局参数、图表辅助线不计为失效。

@@ -24,21 +24,22 @@ guanlineage stats && guanlineage explain s132435b02e7a485780fff4c 集采/地采 
 ## 架构
 
 - `crawler/crawl.py`：并发调用 `guands dataset list/cards`、`guancli ds get`、`guancli etl get`、`guancli page get`，写入 `<db>.tmp`，成功后原子替换 `lineage.db`；ETL 与页面原文缓存到 `data/cache/{etl,page}/`，最后调用 `field_lineage.build()`。
-- `crawler/field_lineage.py`：解析 ETL 算子 DAG（`etl_columns`，每个算子类型一个分支）推导「输出列 ← 输入数据集字段」，SQL 算子用 `sql_columns` 启发式解析；解析页面卡片配置得到「字段 → 卡片」边，并补齐「数据集 → 卡片」接口漏掉的卡片节点、剔除仅被筛选器使用的「数据集 → 页面」边。结果写 `field_edges`（每次 DROP 重建）。
+- `crawler/field_lineage.py`：解析 ETL 算子 DAG（`etl_columns`，每个算子类型一个分支）推导「输出列 ← 输入数据集字段」，SQL 算子用 `sql_columns` 启发式解析；解析页面卡片配置得到「字段 → 卡片」边（卡片内计算字段按 `dsInfo.columns` 递归展开到数据集字段，分组 / 条件过滤字段取 JSON 公式中的来源字段，见 `expand_card_formula`；更换过数据集的卡片按字段 ID 归属到卡片当前数据集，见 `resolve_ref`；解析不到的引用记入 `card_issues`），并补齐「数据集 → 卡片」接口漏掉的卡片节点、剔除仅被筛选器使用的「数据集 → 页面」边。结果写 `field_edges`（每次 DROP 重建）。
 - `src/graph.mjs`：`createGraph()` 内含 GraphQL schema（`buildSchema` SDL）与全部 resolver，CLI 与服务共用；数据库以只读打开。
 - `src/server.mjs`：HTTP；`/` 每次请求重新读取 `web/ui.html`（改页面无需重启），`/graphql` 执行查询。
 - `bin/guanlineage.mjs`：CLI，进程内调用 `graph.query()`，不依赖服务；`crawl` / `rebuild-fields` 转调 Python（`findPython()` 查找解释器，并设 `PYTHONUTF8=1`）。
 - `src/skill.mjs`：`install-skill` / `uninstall-skill`，把 `skills/guan-lineage` 装到已安装助手的 skills 目录（`AGENTS` 列表）：默认用户级（复制，改 `SKILL.md` 后需重装）；`--project` 为本仓库 `.<助手>/skills`（链接，即时生效，写入 `.git/info/exclude`）。
 - `web/ui.html`：单文件页面，cytoscape + dagre（CDN）画资源血缘；字段血缘为自绘「表卡片 + SVG 连线」视图（`renderFieldView` / `drawFieldLinks`），两种视图共用顶部工具栏。
 
-数据表：`nodes(id,type,subtype,name,path,props)`、`edges(src,dst,rel)`、`fields(ds_id,fd_id,name=展示名,phys_name,...)`、`field_edges(src_ds,src_field,dst_ds,dst_field,via,kind,transform)`、`crawl_errors`、`meta`。
+数据表：`nodes(id,type,subtype,name,path,props)`、`edges(src,dst,rel)`、`fields(ds_id,fd_id,name=展示名,phys_name,...)`、`field_edges(src_ds,src_field,dst_ds,dst_field,via,kind,transform)`、`card_issues(card,page,ds,ds_name,field,shown,formula,reason)`（失效卡片，与 `field_edges` 同时重建）、`crawl_errors`、`meta`。
 
 ## 约定与口径
 
-- 边方向一律为数据流向（上游 → 下游）。资源类型：SOURCE / DATASET / ETL / CARD / PAGE。
+- 边方向一律为数据流向（上游 → 下游）。资源类型：SOURCE / DATASET / ETL / CARD / PAGE；资源边另有 `PARAM_OF`（全局参数 → 数据集）。
 - 字段以「数据集 ID + 展示名」标识；展示名 = 别名优先，ETL 中按展示名引用。
 - `field_edges.kind`：`direct` 透传（原样 / 改名 / 仅行筛选 / 分组维度，值未变）；`derived` 计算（聚合、公式、空值/值替换、行列转换、合并列、SQL 表达式）——判定见 `kind_of()`，筛选与改名只作为说明记入 `transform`，不改变判定；`calc` 数据集计算字段；`view`；`card`（`dst_ds` 为卡片，`via` 为页面，`transform` 为「区域 · 聚合 · 卡片公式」）。
 - `transform` 为以 ` → ` 连接的步骤；SQL 步骤格式 `SQL[节点名|节点ID]: 列表达式`，页面与 CLI 都按此解析，改格式需同步 `ui.html` 的 `stepsHtml/appendSql` 与 CLI 的 `explain`。
+- 全局参数（`[DYNAMIC_PARAMS.x]`）建模为虚拟数据集 `GLOBAL_PARAMS`，参数即字段（`meta_type='PARAM'`），每次 `build()` 先删后建（`add_params_node`）；数据集 SQL 引用的参数由 crawl 写入数据集属性 `queryParams`，并从卡片 `dsInfo.config.tableQuery` 补齐。
 - 选择器类卡片（SELECTOR / TREE_SELECTOR / MERGE_SELECTOR）不纳入血缘；页面草稿 `_draft`（正式页的副本，卡片 ID 全部不同）不计：`prune_drafts()` 在推导字段血缘末尾删除草稿页及只属于草稿的卡片。
 
 ## 注意事项

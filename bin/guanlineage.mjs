@@ -37,6 +37,8 @@ const HELP = `guanlineage — 观远 BI 数据集 / ETL / 卡片 / 页面 / 字�
   impact <资源> [--depth 10]           下游影响分析（受影响的 ETL / 数据集 / 卡片 / 页面汇总）
   path <起点> <终点>                   沿数据流向的最短路径
   orphans [--type DATASET] [--limit 100]    无任何上下游的资源
+  broken [--reason dataset|field] [--limit 1000]
+                                       失效卡片：引用的数据集或字段已不存在，按页面分组列出
   sql <ETL>                            ETL 中的 SQL 算子全文
 
 字段
@@ -140,8 +142,9 @@ const gql = async (q, v) => {
 };
 
 const TYPE_CN = { DATASET: '数据集', ETL: 'ETL', CARD: '卡片', PAGE: '页面', SOURCE: '源表', OTHER: '其他', FIELD: '字段' };
+const META_CN = (m) => ({ METRIC: '度量', PARAM: '参数' })[m] || '维度';
 const KIND_CN = { direct: '透传', derived: '计算', view: '视图', calc: '计算字段', card: '卡片使用' };
-const REL_CN = { INPUT_OF: '输入', OUTPUTS: '产出', FEEDS: '视图', USED_BY: '被卡片使用', ON_PAGE: '所在页面', USED_BY_PAGE: '被页面使用', SOURCE_OF: '源表' };
+const REL_CN = { INPUT_OF: '输入', OUTPUTS: '产出', FEEDS: '视图', USED_BY: '被卡片使用', ON_PAGE: '所在页面', USED_BY_PAGE: '被页面使用', SOURCE_OF: '源表', PARAM_OF: '被数据集使用（全局参数）' };
 
 /** 资源参数：ID 或唯一名称 */
 async function resolve(ref, type) {
@@ -275,6 +278,49 @@ const commands = {
     out(orphans, () => [`无上下游的${TYPE_CN[type] || type}：${orphans.length}`, ...orphans.map((n) => `  ${n.name}  [${n.id}]  ${n.path || ''}`)].join('\n'));
   },
 
+  async broken() {
+    const reason = opts.reason ? String(opts.reason).toLowerCase() : null;
+    if (reason && !['dataset', 'field'].includes(reason)) die('--reason 可选 dataset（数据集不存在）或 field（字段不存在）');
+    const { brokenCards: rows } = await gql(
+      `query($r: String, $n: Int) { brokenCards(reason: $r, limit: $n) {
+        card { id name } page { id name } datasetId datasetName field shown formula reason } }`,
+      { r: reason, n: Number(opts.limit || 1000) });
+    out(rows, () => {
+      if (!rows.length) return '没有失效卡片（如刚升级，先运行 guanlineage rebuild-fields 生成检查结果）';
+      // 按 页面 → 卡片 分组
+      const pages = new Map();
+      for (const r of rows) {
+        const pk = r.page?.id || '';
+        if (!pages.has(pk)) pages.set(pk, { page: r.page, cards: new Map() });
+        const cards = pages.get(pk).cards;
+        if (!cards.has(r.card?.id)) cards.set(r.card?.id, { card: r.card, items: [] });
+        cards.get(r.card?.id).items.push(r);
+      }
+      const nCards = new Set(rows.map((r) => r.card?.id)).size;
+      const by = (k) => new Set(rows.filter((r) => r.reason === k).map((r) => r.card?.id)).size;
+      const L = [`失效卡片 ${nCards} 张（数据集不存在 ${by('dataset')} · 字段不存在 ${by('field')}），分布在 ${pages.size} 个页面`];
+      for (const { page, cards } of pages.values()) {
+        L.push('', `页面 ${page?.name || '（未知页面）'}  [${page?.id || '-'}]`);
+        for (const { card, items } of cards.values()) {
+          L.push(`  卡片 ${card?.name || '-'}  [${card?.id || '-'}]`);
+          const seenDs = new Set();
+          for (const r of items) {
+            const ds = `${r.datasetName || '（未知数据集）'} [${r.datasetId}]`;
+            if (r.reason === 'dataset') {
+              // 同一数据集只提示一次
+              if (!seenDs.has(r.datasetId)) L.push(`    数据集不存在  ${ds}  （已删除，或抓取账号无权限）`);
+              seenDs.add(r.datasetId);
+            } else {
+              const via = r.formula ? `  ← ${r.shown}：${r.formula.length > 80 ? r.formula.slice(0, 79) + '…' : r.formula}` : '';
+              L.push(`    字段不存在    ${r.field} @${ds}${via}`);
+            }
+          }
+        }
+      }
+      return L.join('\n');
+    });
+  },
+
   async sql() {
     const r = await resolve(pos[0], 'ETL');
     const { node } = await gql('query($id: ID!) { node(id: $id) { name sqlScripts { id name sql } } }', { id: r.id });
@@ -285,7 +331,7 @@ const commands = {
     const r = await resolve(pos[0], 'DATASET');
     const { node } = await gql('query($id: ID!, $k: String) { node(id: $id) { name fields(keyword: $k) { name physName fdType metaType calcType expr annotation } } }', { id: r.id, k: opts.keyword || null });
     out(node.fields, () => [`${node.name}  字段 ${node.fields.length}`, ...node.fields.map((f) =>
-      `  ${f.name}  ${f.fdType || ''} · ${f.metaType === 'METRIC' ? '度量' : '维度'}${f.calcType && f.calcType !== 'normal' ? ' · 计算' : ''}${f.physName && f.physName !== f.name ? `  (物理名 ${f.physName})` : ''}${f.annotation ? `  # ${f.annotation}` : ''}${f.expr ? `\n      = ${f.expr}` : ''}`)].join('\n'));
+      `  ${f.name}  ${f.fdType || ''} · ${META_CN(f.metaType)}${f.calcType && f.calcType !== 'normal' ? ' · 计算' : ''}${f.physName && f.physName !== f.name ? `  (物理名 ${f.physName})` : ''}${f.annotation ? `  # ${f.annotation}` : ''}${f.expr ? `\n      = ${f.expr}` : ''}`)].join('\n'));
   },
 
   async field() {
@@ -347,7 +393,7 @@ const commands = {
     const data = { field: { ...f, upstream: undefined }, calculations: [...groups.values()], sql: sqls };
     out(data, () => {
       const L = [`${f.name}  @${TYPE_CN[f.dataset?.type] || ''} ${f.dataset?.name}`];
-      if (f.fdType) L.push(`类型    ${f.fdType} · ${f.metaType === 'METRIC' ? '度量' : '维度'}${f.calcType && f.calcType !== 'normal' ? ' · 计算字段' : ''}`);
+      if (f.fdType) L.push(`类型    ${f.fdType} · ${META_CN(f.metaType)}${f.calcType && f.calcType !== 'normal' ? ' · 计算字段' : ''}`);
       if (f.physName && f.physName !== f.name) L.push(`物理名  ${f.physName}`);
       if (f.annotation) L.push(`注释    ${f.annotation}`);
       if (f.expr) L.push(`表达式  ${f.expr}`);

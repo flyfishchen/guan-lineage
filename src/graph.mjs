@@ -49,7 +49,7 @@ export function createGraph({ dbPath = path.join(DATA_DIR, 'lineage.db'), cacheD
       name: String
       "STRING / INT / DOUBLE / DATE ..."
       fdType: String
-      "DIM 维度 / METRIC 度量"
+      "DIM 维度 / METRIC 度量 / PARAM 全局参数"
       metaType: String
       "normal 为原始字段，其余为计算字段"
       calcType: String
@@ -89,7 +89,7 @@ export function createGraph({ dbPath = path.join(DATA_DIR, 'lineage.db'), cacheD
       contextIds: [ID!]!
     }
 
-    "边方向为数据流向：SOURCE -SOURCE_OF-> DATASET -INPUT_OF-> ETL -OUTPUTS-> DATASET -USED_BY-> CARD -ON_PAGE-> PAGE"
+    "边方向为数据流向：SOURCE -SOURCE_OF-> DATASET -INPUT_OF-> ETL -OUTPUTS-> DATASET -USED_BY-> CARD -ON_PAGE-> PAGE；全局参数为虚拟数据集 GLOBAL_PARAMS，-PARAM_OF-> 数据集（计算字段或查询 SQL 引用）"
     type Edge {
       rel: String!
       src: Node!
@@ -114,6 +114,23 @@ export function createGraph({ dbPath = path.join(DATA_DIR, 'lineage.db'), cacheD
 
     type CrawlError { id: String, step: String, error: String }
 
+    "失效卡片中的一处问题：卡片引用的数据集或字段已不存在"
+    type CardIssue {
+      card: Node
+      page: Node
+      datasetId: ID!
+      "数据集名；数据集不在库中时取自卡片配置"
+      datasetName: String
+      dataset: Node
+      "找不到的字段名；reason=dataset 时为卡片内显示名"
+      field: String!
+      "卡片内显示名（公式中引用缺失时为引用它的卡片字段）"
+      shown: String
+      formula: String
+      "dataset 数据集不在库中（已删除或抓取账号无权限）| field 字段不存在"
+      reason: String!
+    }
+
     type Query {
       node(id: ID!): Node
       "按类型 / 名称关键字 / 路径关键字检索"
@@ -132,6 +149,8 @@ export function createGraph({ dbPath = path.join(DATA_DIR, 'lineage.db'), cacheD
       fieldLineage(dsId: ID!, name: String!, direction: Direction = BOTH, depth: Int = 5): FieldGraph!
       stats: Stats!
       crawlErrors(limit: Int = 50): [CrawlError!]!
+      "失效卡片：引用的数据集或字段已不存在；reason 可选 dataset / field"
+      brokenCards(reason: String, limit: Int = 1000): [CardIssue!]!
     }
   `);
 
@@ -155,6 +174,7 @@ export function createGraph({ dbPath = path.join(DATA_DIR, 'lineage.db'), cacheD
   // fields 表由新版 crawl.py 生成；旧库没有该表时返回空
   const hasFields = !!q("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'fields'").get();
   const hasFieldEdges = !!q("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'field_edges'").get();
+  const hasCardIssues = !!q("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'card_issues'").get();
   // 字段以 (数据集, 展示名) 标识，与 field_edges 一致
   const fieldObj = (f) => ({
     id: `${f.ds_id}::${f.name}`, seq: f.seq, name: f.name, physName: f.phys_name, fdType: f.fd_type, metaType: f.meta_type,
@@ -342,6 +362,22 @@ export function createGraph({ dbPath = path.join(DATA_DIR, 'lineage.db'), cacheD
       errors: q('SELECT count(*) c FROM crawl_errors').get().c,
     }),
     crawlErrors: ({ limit }) => q('SELECT id, step, error FROM crawl_errors LIMIT ?').all(limit),
+    // 旧库没有 card_issues 表时返回空（运行 rebuild-fields 生成）
+    brokenCards: ({ reason, limit }) =>
+      hasCardIssues
+        ? q(`SELECT * FROM card_issues WHERE (? IS NULL OR reason = ?)
+             ORDER BY page, card, reason, ds, field LIMIT ?`).all(reason ?? null, reason ?? null, Math.min(limit, 5000)).map((r) => ({
+            card: () => getNode(r.card),
+            page: () => (r.page ? getNode(r.page) : null),
+            datasetId: r.ds,
+            datasetName: getNode(r.ds)?.name ?? r.ds_name,
+            dataset: () => getNode(r.ds),
+            field: r.field,
+            shown: r.shown,
+            formula: r.formula,
+            reason: r.reason,
+          }))
+        : [],
   };
 
   return {
