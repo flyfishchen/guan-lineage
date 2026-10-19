@@ -55,6 +55,12 @@ export function serve({ port = 4000, host = '127.0.0.1', dbPath } = {}) {
     const result = await graph.query(body.query, body.variables);
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' }).end(JSON.stringify(result));
   }
+  server.on('error', (e) => {
+    const hint = e.code === 'EADDRINUSE' ? `端口 ${port} 已被占用（可能已有 guanlineage serve 在运行），换端口：--port <端口>`
+      : e.code === 'EACCES' ? `无权限监听 ${host}:${port}` : e.message;
+    console.error(`启动失败：${hint}`);
+    process.exit(1);
+  });
   const shown = host === '0.0.0.0' || host === '::' ? 'localhost' : host.includes(':') ? `[${host}]` : host;
   server.listen(port, host, () =>
     console.log(`血缘图: http://${shown}:${port}/   GraphQL: http://${shown}:${port}/graphql   (监听 ${host}，db: ${graph.dbPath})`));
