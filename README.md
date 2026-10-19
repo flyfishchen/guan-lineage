@@ -6,12 +6,12 @@
 
 ## 安装
 
-一键安装（检查 Node / Python / guands / guancli → `npm install` → `npm link` → 自检）：
+一键安装（检查 Node / Python / guands / guancli → `npm install` → `npm link` → 自检 → 安装 AI skill）：
 
 | 系统 | 命令 |
 |---|---|
-| macOS / Linux | `./install.sh`（加 `--crawl` 装完立即抓取） |
-| Windows | 双击 `install.cmd`，或 `install.cmd --crawl` |
+| macOS / Linux | `./install.sh`（`--crawl` 装完立即抓取，`--no-skill` 不装 AI skill） |
+| Windows | 双击 `install.cmd`，或 `install.cmd --crawl` / `install.cmd --no-skill` |
 
 脚本不会自动安装 Node / Python，缺失时会给出安装命令。手动安装：
 
@@ -59,6 +59,35 @@ guancli status            # 确认「API 连接正常」
 
 支持 Windows、macOS、Linux。Python 按 `py -3` / `python` / `python3` 顺序自动查找（非 Windows 为 `python3` / `python`），也可用环境变量 `GUAN_LINEAGE_PYTHON` 指定解释器路径。Windows 上抓取结束时如 `guanlineage serve` 正在运行，数据库文件被占用无法替换，需先停止服务。
 
+## AI skill：在 AI 对话中查询血缘
+
+`skills/guan-lineage/SKILL.md` 告诉 AI 编码助手何时、如何调用 `guanlineage`。安装后，在助手的对话窗口里直接问「改这个数据集会影响哪些页面」「这个字段怎么算的」，助手会自行运行相应命令并解读结果。
+
+一键安装脚本最后一步会自动安装；也可单独运行：
+
+```bash
+guanlineage install-skill                     # 安装到本机已安装的全部助手
+guanlineage install-skill --agents claude,codex   # 只装指定助手（未检测到也会创建目录）
+guanlineage install-skill --dir <skills 目录>  # 装到任意 skills 目录（其它支持 SKILL.md 的工具）
+guanlineage uninstall-skill                   # 从所有助手中移除
+```
+
+| 助手 | `--agents` | 安装位置（用户级） |
+|---|---|---|
+| Claude Code | `claude` | `~/.claude/skills/guan-lineage`（`CLAUDE_CONFIG_DIR` 可覆盖） |
+| Codex | `codex` | `~/.codex/skills/guan-lineage`（`CODEX_HOME` 可覆盖） |
+| Cursor | `cursor` | `~/.cursor/skills/guan-lineage` |
+| Gemini CLI | `gemini` | `~/.gemini/skills/guan-lineage` |
+| CodeBuddy | `codebuddy` | `~/.codebuddy/skills/guan-lineage`（与观远 guanskill 一致） |
+| WorkBuddy | `workbuddy` | `~/.workbuddy/skills/guan-lineage`（与观远 guanskill 一致） |
+
+Windows 上 `~` 即 `%USERPROFILE%`。
+
+- **检测方式**：助手的配置目录（如 `~/.claude`）存在即视为已安装。之后才装的助手，重新运行 `guanlineage install-skill` 即可。
+- **生效**：重启助手或新开对话后生效。
+- **更新**：安装方式为复制，`SKILL.md` 更新（如 `git pull` 后）需重新运行 `guanlineage install-skill`。开发者可手动把目标目录软链接到仓库的 `skills/guan-lineage`，`install-skill` 检测到软链接时保持不动。
+- **前提**：skill 只是使用说明，助手实际执行的是本机的 `guanlineage` 命令，因此助手须运行在装了本项目的同一台机器上。claude.ai 网页版等在云端执行命令的对话窗口无法使用。
+
 ## 快速开始
 
 ```bash
@@ -75,6 +104,7 @@ guanlineage stats
 | `rebuild-fields` | 基于缓存的 ETL / 页面配置重算字段血缘（秒级） |
 | `serve [--port 4000] [--host 127.0.0.1]` | 关系图页面与 GraphQL；默认仅本机访问，局域网共享用 `--host 0.0.0.0`（无鉴权） |
 | `stats` | 抓取时间与统计 |
+| `install-skill [--agents a,b] [--dir 目录]` / `uninstall-skill` | 安装 / 移除 AI skill |
 | `search <关键字> [--type DATASET\|ETL\|CARD\|PAGE\|SOURCE\|FIELD]` | 按名称搜索资源或字段 |
 | `show <资源>` | 资源详情 |
 | `lineage <资源> [--dir up\|down\|both] [--depth 3] [--types DATASET,ETL,PAGE]` | 资源血缘，按层级列出 |
@@ -97,10 +127,12 @@ guanlineage stats
 bin/guanlineage.mjs     CLI
 src/graph.mjs           GraphQL schema 与查询实现（CLI 与服务共用）
 src/server.mjs          HTTP 服务
+src/skill.mjs           AI skill 安装 / 移除
 web/ui.html             关系图页面（资源血缘 + 字段血缘）
 crawler/crawl.py        抓取：数据集、ETL、卡片、页面、字段 → SQLite
 crawler/field_lineage.py 字段血缘推导（解析 ETL 算子与卡片配置）
-skills/guan-lineage/    Claude Code Skill
+skills/guan-lineage/    AI skill（SKILL.md，由 install-skill 安装到各助手）
+install.sh / install.cmd / install.ps1   一键安装（macOS·Linux / Windows）
 data/                   lineage.db、cache/{etl,page}（不入库）
 ```
 

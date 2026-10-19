@@ -1,11 +1,12 @@
 ﻿# guan-lineage 一键安装（Windows）
 #
-#   双击 install.cmd，或在 PowerShell 中：  .\install.ps1 [-Crawl]
-#   -Crawl  安装后立即全量抓取（约 8 分钟，只读）
+#   双击 install.cmd，或在 PowerShell 中：  .\install.ps1 [-Crawl] [-NoSkill]
+#   -Crawl    安装后立即全量抓取（约 8 分钟，只读）
+#   -NoSkill  不安装 AI skill
 #
 # 不会自动安装 Node / Python，缺失时给出安装提示。
 # 注意：本文件须保存为 UTF-8 with BOM，否则 Windows PowerShell 5.1 会把中文读成乱码。
-param([switch]$Crawl)
+param([switch]$Crawl, [switch]$NoSkill)
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -16,7 +17,7 @@ function Warn($m) { Write-Host "  [!]  $m" -ForegroundColor Yellow }
 function Die($m)  { Write-Host "  [X]  $m" -ForegroundColor Red; exit 1 }
 function Has($c)  { [bool](Get-Command $c -ErrorAction SilentlyContinue) }
 
-Write-Host '[1/4] 检查运行环境'
+Write-Host '[1/5] 检查运行环境'
 
 if (-not (Has node)) { Die '未找到 Node.js（需 ≥ 22.13）。安装：winget install OpenJS.NodeJS.LTS，或从 https://nodejs.org 下载，装完重开终端' }
 # JS 内不用双引号：Windows PowerShell 5.1 向外部程序传参时会吞掉双引号
@@ -48,15 +49,15 @@ if ((Has guancli) -and (Has guands)) {
 }
 
 # npm.cmd：避免 npm.ps1 受执行策略限制
-Write-Host '[2/4] 安装依赖（npm install）'
+Write-Host '[2/5] 安装依赖（npm install）'
 npm.cmd install --no-fund --no-audit
 if ($LASTEXITCODE -ne 0) { Die 'npm install 失败，见上方输出' }
 
-Write-Host '[3/4] 注册全局命令 guanlineage（npm link）'
+Write-Host '[3/5] 注册全局命令 guanlineage（npm link）'
 npm.cmd link --no-fund --no-audit
 if ($LASTEXITCODE -ne 0) { Die 'npm link 失败，见上方输出' }
 
-Write-Host '[4/4] 自检'
+Write-Host '[4/5] 自检'
 $prefix = (npm.cmd prefix -g).Trim()
 # 当前会话的 PATH 可能还没有 npm 全局目录（刚装 Node 时常见）
 if (-not (Has guanlineage) -and ($env:Path -split ';') -notcontains $prefix) { $env:Path = "$prefix;$env:Path" }
@@ -65,6 +66,15 @@ if (Has guanlineage) {
   Ok "guanlineage 可用：$((Get-Command guanlineage).Source)"
 } else {
   Warn "guanlineage 已安装到 $prefix，但该目录不在 PATH 中；请将其加入系统 PATH 后重开终端"
+}
+
+Write-Host '[5/5] 安装 AI skill（让 AI 助手在对话中直接查询血缘）'
+if ($NoSkill) {
+  Ok '已跳过（-NoSkill）'
+} else {
+  # 直接用仓库内的 CLI，不依赖 PATH；失败不影响主程序使用
+  node bin/guanlineage.mjs install-skill | ForEach-Object { "  $_" }
+  if ($LASTEXITCODE -ne 0) { Warn 'AI skill 安装失败，可稍后运行 guanlineage install-skill 重试' }
 }
 
 $data = if ($env:GUAN_LINEAGE_DATA) { $env:GUAN_LINEAGE_DATA } else { Join-Path $PSScriptRoot 'data' }

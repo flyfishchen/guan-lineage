@@ -28,6 +28,7 @@ guanlineage stats && guanlineage explain s132435b02e7a485780fff4c 集采/地采 
 - `src/graph.mjs`：`createGraph()` 内含 GraphQL schema（`buildSchema` SDL）与全部 resolver，CLI 与服务共用；数据库以只读打开。
 - `src/server.mjs`：HTTP；`/` 每次请求重新读取 `web/ui.html`（改页面无需重启），`/graphql` 执行查询。
 - `bin/guanlineage.mjs`：CLI，进程内调用 `graph.query()`，不依赖服务；`crawl` / `rebuild-fields` 转调 Python（`findPython()` 查找解释器，并设 `PYTHONUTF8=1`）。
+- `src/skill.mjs`：`install-skill` / `uninstall-skill`，把 `skills/guan-lineage` 复制到已安装助手的用户级 skills 目录（`AGENTS` 列表）；改 `SKILL.md` 后需重新运行 `guanlineage install-skill`。
 - `web/ui.html`：单文件页面，cytoscape + dagre（CDN）画资源血缘；字段血缘为自绘「表卡片 + SVG 连线」视图（`renderFieldView` / `drawFieldLinks`），两种视图共用顶部工具栏。
 
 数据表：`nodes(id,type,subtype,name,path,props)`、`edges(src,dst,rel)`、`fields(ds_id,fd_id,name=展示名,phys_name,...)`、`field_edges(src_ds,src_field,dst_ds,dst_field,via,kind,transform)`、`crawl_errors`、`meta`。

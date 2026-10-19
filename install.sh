@@ -1,13 +1,23 @@
 #!/bin/sh
 # guan-lineage 一键安装（macOS / Linux）
 #
-#   ./install.sh            检查环境 → npm install → npm link → 自检
-#   ./install.sh --crawl    安装后立即全量抓取（约 8 分钟，只读）
+#   ./install.sh              检查环境 → npm install → npm link → 自检 → 安装 AI skill
+#   ./install.sh --crawl      安装后立即全量抓取（约 8 分钟，只读）
+#   ./install.sh --no-skill   不安装 AI skill
 #
 # 不会自动安装 Node / Python（需管理员权限且各发行版方式不同），缺失时给出安装提示。
 set -eu
 
 cd "$(dirname "$0")"
+
+CRAWL=0 SKILL=1
+for a in "$@"; do
+  case "$a" in
+    --crawl) CRAWL=1 ;;
+    --no-skill) SKILL=0 ;;
+    *) echo "未知参数 $a（可用 --crawl / --no-skill）" >&2; exit 2 ;;
+  esac
+done
 
 # 仅在终端中输出颜色
 if [ -t 1 ]; then G='\033[32m' Y='\033[33m' R='\033[31m' N='\033[0m'; else G='' Y='' R='' N=''; fi
@@ -21,7 +31,7 @@ case "$(uname -s)" in
   *)      die "不支持的系统 $(uname -s)；Windows 请运行 install.cmd" ;;
 esac
 
-echo "[1/4] 检查运行环境"
+echo "[1/5] 检查运行环境"
 
 if ! command -v node >/dev/null 2>&1; then
   [ "$OS" = macos ] && hint="brew install node" || hint="见 https://nodejs.org 或用 nvm：nvm install 22"
@@ -53,25 +63,34 @@ else
       npm install -g --foreground-scripts @guandata/guanskill && guancli auth login"
 fi
 
-echo "[2/4] 安装依赖（npm install）"
+echo "[2/5] 安装依赖（npm install）"
 npm install --no-fund --no-audit
 
-echo "[3/4] 注册全局命令 guanlineage（npm link）"
+echo "[3/5] 注册全局命令 guanlineage（npm link）"
 if ! npm link --no-fund --no-audit; then
   die "npm link 失败（通常是全局目录无写权限）。可改用用户目录：
       npm config set prefix ~/.npm-global && export PATH=~/.npm-global/bin:\$PATH
     并把 export 那一行写入 ~/.zshrc 或 ~/.bashrc，然后重新运行 ./install.sh"
 fi
 
-echo "[4/4] 自检"
+echo "[4/5] 自检"
 if command -v guanlineage >/dev/null 2>&1; then
   guanlineage help >/dev/null && ok "guanlineage 可用：$(command -v guanlineage)"
 else
   warn "guanlineage 已安装到 $(npm prefix -g)/bin，但该目录不在 PATH 中；请将其加入 PATH 后重开终端"
 fi
 
+echo "[5/5] 安装 AI skill（让 AI 助手在对话中直接查询血缘）"
+if [ "$SKILL" = 0 ]; then
+  ok "已跳过（--no-skill）"
+else
+  # 直接用仓库内的 CLI，不依赖 PATH；失败不影响主程序使用
+  if out=$(node bin/guanlineage.mjs install-skill 2>&1); then printf '%s\n' "$out" | sed 's/^/  /'
+  else printf '%s\n' "$out" | sed 's/^/  /'; warn "AI skill 安装失败，可稍后运行 guanlineage install-skill 重试"; fi
+fi
+
 DATA="${GUAN_LINEAGE_DATA:-$(pwd)/data}"
-if [ "${1:-}" = "--crawl" ]; then
+if [ "$CRAWL" = 1 ]; then
   guanlineage crawl
 elif [ -f "$DATA/lineage.db" ]; then
   ok "已有血缘库 $DATA/lineage.db"
