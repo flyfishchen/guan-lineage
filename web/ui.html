@@ -1,0 +1,941 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BI 血缘关系图</title>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+<style>
+  :root {
+    --bg: #f7f7f8; --panel: #ffffff; --text: #1f2328; --muted: #6b7280; --border: #e5e7eb;
+    --accent: #2563eb; --edge: #9ca3af;
+    --c-dataset: #2563eb; --c-etl: #d97706; --c-card: #059669; --c-page: #7c3aed; --c-source: #64748b; --c-other: #9ca3af;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111316; --panel: #1a1d21; --text: #e6e8eb; --muted: #9aa1ab; --border: #2b3036;
+      --accent: #60a5fa; --edge: #5b636d;
+      --c-dataset: #60a5fa; --c-etl: #fbbf24; --c-card: #34d399; --c-page: #a78bfa; --c-source: #94a3b8; --c-other: #6b7280;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; overflow: hidden; display: grid; grid-template-columns: 1fr; background: var(--bg); color: var(--text);
+         font: 13px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  /* 属性抽屉：默认隐藏，单击节点时从右侧滑出 */
+  #drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 400px; max-width: 100vw; z-index: 20; background: var(--panel);
+            border-left: 1px solid var(--border); box-shadow: -8px 0 24px rgba(0,0,0,.25); padding: 14px; overflow: auto;
+            transform: translateX(105%); transition: transform .18s ease; }
+  #drawer.open { transform: none; }
+  #drawer h1 { padding-right: 28px; }
+  .x { position: absolute; top: 8px; right: 10px; width: auto; margin: 0; padding: 0 8px; background: transparent; color: var(--muted); font-size: 20px; line-height: 1.2; }
+  .x:hover { color: var(--text); }
+  /* 弹窗：搜索、字段详情 */
+  dialog { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); color: var(--text); padding: 16px 18px; box-shadow: 0 12px 40px rgba(0,0,0,.35); }
+  dialog::backdrop { background: rgba(0,0,0,.35); }
+  #searchDlg { width: min(640px, calc(100vw - 32px)); margin-top: 10vh; }
+  #searchDlg .srow { display: flex; gap: 8px; }
+  #searchDlg .srow input { flex: 1; } #searchDlg .srow select { width: 150px; }
+  #results { margin-top: 10px; max-height: 55vh; overflow: auto; }
+  /* 轻浮层：字段详情 / ƒ 计算 / 连线说明，无遮罩，点外部或 Esc 关闭 */
+  #pop { position: fixed; z-index: 30; width: max-content; max-width: min(460px, calc(100vw - 24px)); max-height: 60vh; overflow: auto;
+         background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 12px;
+         box-shadow: 0 8px 28px rgba(0,0,0,.35); }
+  #pop[hidden] { display: none; }
+  #pop .ph { font-weight: 600; font-size: 13px; margin-bottom: 4px; word-break: break-all; }
+  #pop .pm { color: var(--muted); word-break: break-all; }
+  #pop .code { font-family: ui-monospace, monospace; font-size: 11px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+               padding: 6px 8px; margin-top: 6px; white-space: pre-wrap; word-break: break-all; }
+  #pop ol.steps { margin: 6px 0 0; padding-left: 20px; } #pop ol.steps li { margin-bottom: 4px; }
+  #pop ol.steps .code { margin-top: 0; }
+  #pop details.sql { margin-top: 8px; } #pop details.sql summary { cursor: pointer; color: var(--accent); }
+  #pop details.sql .code { max-height: 260px; overflow: auto; }
+  #pop .calc-src { border-top: 1px dashed var(--border); padding-top: 6px; margin-top: 6px; }
+  #pop .sec { margin-top: 8px; font-weight: 600; font-size: 12px; }
+  #pop .sec .muted { font-weight: normal; }
+  #pop .chips .pm { font-size: 11px; margin-right: 2px; }
+  #pop .cf-src.hl { border-color: var(--accent); color: var(--accent); }
+  #pop .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  #pop .acts { display: flex; gap: 6px; margin-top: 8px; }
+  #pop .acts button { width: auto; margin: 0; padding: 3px 10px; font-size: 12px; }
+  #pop .acts button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--border); }
+  .fv-link { cursor: pointer; }
+  .dlg-actions { display: flex; gap: 8px; margin-top: 14px; }
+  .dlg-actions button { margin: 0; }
+  .dlg-actions button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--border); }
+  kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; color: var(--muted); }
+  h1 { font-size: 15px; margin: 0 0 4px; word-break: break-all; }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+  label { display: block; color: var(--muted); font-size: 12px; margin: 10px 0 4px; }
+  input, select { width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
+  .row { display: flex; gap: 8px; } .row > * { flex: 1; }
+  .types { display: flex; flex-wrap: wrap; gap: 6px 12px; }
+  .types label { display: inline-flex; align-items: center; gap: 4px; margin: 0; color: var(--text); }
+  .types input { width: auto; }
+  button { margin-top: 12px; width: 100%; padding: 7px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font: inherit; cursor: pointer; }
+
+  .item { padding: 6px 8px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
+  .item:hover { background: var(--bg); border-color: var(--border); }
+  .item .p { color: var(--muted); font-size: 11px; word-break: break-all; }
+  .tag { display: inline-block; font-size: 10px; padding: 0 5px; border-radius: 4px; color: #fff; margin-right: 4px; vertical-align: 1px; }
+  main { min-width: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+  .bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  .bar .sep { flex: 1; min-width: 0; }
+  .bar [hidden] { display: none !important; }
+  .bar button.ghost { width: auto; margin: 0; padding: 3px 9px; background: transparent; color: var(--accent); border: 1px solid var(--border); }
+  .bar .ctl { width: auto; padding: 3px 6px; }
+  .bar #locate { width: 170px; }
+  .bar .opt { display: inline-flex; align-items: center; gap: 4px; margin: 0; color: var(--text); }
+  .bar .opt input { width: auto; } .bar .opt input[type=range] { width: 90px; }
+  .bar .types { gap: 4px 10px; }
+  .bar .types label.na { opacity: 0.35; pointer-events: none; }
+  .zoom { display: inline-flex; align-items: center; gap: 4px; }
+  .zoom button { min-width: 28px; }
+  #pct { min-width: 42px; text-align: center; font-size: 12px; color: var(--muted); }
+  .bar2 { display: flex; gap: 16px; align-items: center; padding: 4px 12px; font-size: 12px; border-bottom: 1px solid var(--border); }
+  #legend span.lg { margin-right: 10px; }
+  #legend i { display: inline-block; width: 22px; height: 0; border-top: 2px solid var(--edge); vertical-align: middle; margin: 0 4px 0 6px; }
+  #legend i.l-derived { border-top-style: dashed; border-color: var(--c-etl); }
+  #legend i.l-card { border-color: var(--c-card); }
+  #stage { position: relative; flex: 1; min-height: 0; }
+  #cy { position: absolute; inset: 0; }
+  dl { margin: 0; } dt { color: var(--muted); font-size: 12px; margin-top: 8px; } dd { margin: 0; word-break: break-all; }
+  dl.meta { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 8px 0 4px; font-size: 12px; }
+  dl.meta dt { margin: 0; } dl.meta dd.mono { font-family: ui-monospace, monospace; font-size: 11px; }
+  details.props summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 12px; }
+  table.fd { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+  table.fd th, table.fd td { text-align: left; padding: 3px 4px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.fd th { color: var(--muted); font-weight: normal; position: sticky; top: 0; background: var(--panel); }
+  table.fd tr.hit td { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+  .fdwrap { margin-top: 6px; }
+  .fd-item { cursor: pointer; }
+  .fd-item:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .fd-item.hit { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+  .fd-tags { flex: none; display: inline-flex; gap: 4px; }
+  .cf-zone.calc { color: var(--c-etl); border-color: var(--c-etl); }
+  .fd-note { font-size: 11px; color: var(--muted); margin-top: 2px; word-break: break-all; }
+  .cf-group { margin: 6px 0 10px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .cf-ds { cursor: pointer; font-weight: 600; font-size: 12px; word-break: break-all; padding: 7px 10px; background: var(--bg); border-bottom: 1px solid var(--border); }
+  .cf-ds:hover { color: var(--accent); }
+  .cf-item { padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  .cf-item:last-child { border-bottom: 0; }
+  .cf-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .cf-name { font-weight: 600; word-break: break-all; }
+  .cf-name.link { cursor: pointer; } .cf-name.link:hover { color: var(--accent); }
+  .cf-zone { flex: none; font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 10px; padding: 0 7px; white-space: nowrap; }
+  .cf-expr { margin-top: 4px; font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted); word-break: break-all;
+             display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+  .cf-expr.open { -webkit-line-clamp: unset; }
+  .cf-srcs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; align-items: center; }
+  .cf-srcs .muted { font-size: 11px; }
+  .cf-src { font-size: 11px; color: var(--text); text-decoration: none; border: 1px solid var(--border); border-radius: 10px; padding: 0 7px; background: var(--bg); }
+  .cf-src:hover { color: var(--accent); border-color: var(--accent); }
+  .cf-page, #detail a { color: var(--accent); text-decoration: none; }
+  .cf-page:hover, #detail a:hover { text-decoration: underline; }
+  .expr { color: var(--muted); font-size: 11px; word-break: break-all; }
+  .mt { font-size: 10px; padding: 0 4px; border-radius: 3px; border: 1px solid var(--border); color: var(--muted); }
+  #fv-body { position: absolute; inset: 0; overflow: hidden; cursor: grab; touch-action: none; background: var(--bg); z-index: 3; }
+  #fv-body[hidden] { display: none; }
+  #fv-body.dragging { cursor: grabbing; user-select: none; }
+  #fv-stage { position: absolute; left: 0; top: 0; padding: 24px; transform-origin: 0 0; }
+  #fv-svg { position: absolute; left: 24px; top: 24px; overflow: visible; z-index: 2; pointer-events: none; }
+  #fv-svg path { pointer-events: stroke; }
+  .fv-cols { position: relative; display: flex; gap: 110px; align-items: flex-start; width: max-content; }
+  .fv-col { display: flex; flex-direction: column; gap: 18px; }
+  .fv-card { width: 230px; background: var(--panel); border: 1px solid var(--border); border-top: 3px solid var(--c); border-radius: 8px; overflow: hidden; position: relative; z-index: 1; }
+  .fv-head { padding: 7px 10px; font-weight: 600; font-size: 12px; cursor: pointer; border-bottom: 1px solid var(--border); word-break: break-all; }
+  .fv-head:hover { color: var(--accent); }
+  .fv-head.sel { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .fv-row { display: flex; justify-content: space-between; gap: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; color: var(--muted); }
+  .fv-row.path { color: var(--text); }
+  .fv-row.hot { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); }
+  #fv-body.selecting .fv-row:not(.hot):not(.root) { opacity: 0.45; }
+  .fv-row.root { background: color-mix(in srgb, var(--accent) 28%, transparent); color: var(--text); font-weight: 600; }
+  .fv-t { color: var(--muted); font-size: 10px; flex: none; }
+  .fv-kind { font-size: 10px; font-weight: normal; padding: 0 4px; margin-right: 4px; border-radius: 3px; color: #fff; background: var(--c-card); }
+  .fv-more { width: 230px; margin: 0; padding: 6px; background: transparent; color: var(--accent); border: 1px dashed var(--border); border-radius: 8px; }
+  .fv-link.card { stroke: var(--c-card); }
+  .fv-link.fv-stem { stroke: var(--c-etl); stroke-width: 1.8; stroke-dasharray: none; }
+  .fv-junc { pointer-events: none; }
+  .fv-junc circle { fill: var(--panel); stroke: var(--c-etl); stroke-width: 1.5; }
+  .fv-junc text { fill: var(--c-etl); font: italic bold 11px serif; pointer-events: none; }
+  .fv-row.loc, .fv-head.loc { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .fv-row.ctx { opacity: 0.7; font-style: italic; box-shadow: inset 2px 0 0 var(--c-etl); }
+  .fv-f { color: var(--c-etl); font-weight: bold; margin-right: 4px; font-family: serif; }
+  .fv-link { fill: none; stroke: var(--edge); stroke-width: 1.4; pointer-events: stroke; }
+  .fv-link.derived, .fv-link.calc { stroke: var(--c-etl); stroke-dasharray: 5 3; }
+  .fv-link.view { stroke-dasharray: 2 3; }
+  .fv-link.hot { stroke: var(--accent); stroke-width: 2.6; stroke-dasharray: none; }
+  #fv-body.selecting .fv-link:not(.hot), #fv-body.selecting .fv-junc:not(.hot) { opacity: 0.15; }
+  .fv-junc.hot circle { stroke: var(--accent); stroke-width: 2.2; }
+  pre { white-space: pre-wrap; word-break: break-all; font-size: 11px; background: var(--bg); padding: 8px; border-radius: 6px; max-height: 320px; overflow: auto; }
+  .muted { color: var(--muted); }
+  @media (max-width: 900px) {
+    .bar #locate { width: 120px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <div class="bar">
+    <button id="openSearch" class="ghost" title="搜索资源或字段（/ 或 Ctrl+K）">🔍 搜索</button>
+    <button id="back" class="ghost" hidden>← 资源关系图</button>
+    <b id="mode">资源血缘</b><span id="title" class="muted"></span>
+    <span class="sep"></span>
+    <select id="dir" class="ctl" title="方向"><option value="BOTH">上下游</option><option value="UP">上游（溯源）</option><option value="DOWN">下游（影响）</option></select>
+    <label class="opt">深度 <input id="depth" type="range" min="1" max="10" value="3"> <b id="depthV">3</b></label>
+    <span class="types" id="types" title="显示的节点类型">
+      <label><input type="checkbox" value="SOURCE" checked>源表</label>
+      <label><input type="checkbox" value="DATASET" checked>数据集</label>
+      <label><input type="checkbox" value="ETL" checked>ETL</label>
+      <label><input type="checkbox" value="CARD">卡片</label>
+      <label><input type="checkbox" value="PAGE" checked>页面</label>
+    </span>
+    <label class="opt" id="allWrap" hidden><input type="checkbox" id="fv-all"> 全部字段</label>
+    <span class="zoom"><button class="ghost" id="zoomOut" title="缩小">−</button><span id="pct">100%</span><button class="ghost" id="zoomIn" title="放大">+</button><button class="ghost" id="fit" title="适应窗口">适应</button><button class="ghost" id="toRoot" title="回到中心节点">定位</button></span>
+    <input id="locate" class="ctl" placeholder="在图中定位…">
+  </div>
+  <div class="bar2"><span id="legend"></span><span id="status" class="muted"></span></div>
+  <div id="stage">
+    <div id="cy"></div>
+    <div id="fv-body" hidden><div id="fv-stage"></div></div>
+  </div>
+</main>
+<aside id="drawer"><button class="x" id="closeDrawer" title="关闭（Esc）">×</button><div id="detail"></div></aside>
+
+<dialog id="searchDlg">
+  <div class="srow">
+    <input id="kw" placeholder="名称关键字，如：采购主题明细 / ETL_供应链 / 供应链管理概览" autocomplete="off">
+    <select id="kwType"><option value="">全部资源</option><option value="DATASET">数据集</option><option value="ETL">ETL</option><option value="PAGE">页面</option><option value="CARD">卡片</option><option value="SOURCE">源表</option><option value="FIELD">字段 → 字段血缘</option></select>
+  </div>
+  <div id="results"><p class="muted">输入关键字搜索。选「字段」时点结果直接打开该字段的字段血缘。</p></div>
+  <div class="sub" id="stats" style="margin: 10px 0 0">加载中…</div>
+  <div class="muted" style="font-size:12px">单击节点 / 字段看详情，双击以它为中心展开 · <kbd>/</kbd> 打开搜索 · <kbd>Esc</kbd> 关闭</div>
+</dialog>
+
+<div id="pop" hidden></div>
+
+<script>
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const TYPES = { SOURCE: '源表', DATASET: '数据集', ETL: 'ETL', CARD: '卡片', PAGE: '页面', FIELD: '字段', OTHER: '其他' };
+const color = (t) => css('--c-' + (t || 'other').toLowerCase()) || css('--c-other');
+const $ = (id) => document.getElementById(id);
+let current = null; // { kind: 'node', id } | { kind: 'field', ds, name }
+
+async function gql(query, variables) {
+  const r = await fetch('/graphql', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) });
+  const j = await r.json();
+  if (j.errors) throw new Error(j.errors.map((e) => e.message).join('; '));
+  return j.data;
+}
+
+const LEGEND_NODE = Object.entries(TYPES).filter(([k]) => k !== 'OTHER' && k !== 'FIELD')
+  .map(([k, v]) => `<span class="lg"><span class="tag" style="background:${color(k)}">&nbsp;</span>${v}</span>`).join('');
+const LEGEND_FIELD = '<i class="l-direct"></i>透传/改名/筛选 <i class="l-derived"></i>计算（值被改变） <i class="l-card"></i>卡片使用'
+  + ' <span class="muted">· 单击字段选中并高亮链路，单击连线看说明，双击字段切换中心 · 单击表头看资源详情，双击打开资源血缘 · 拖动平移，滚轮缩放</span>';
+
+// 资源血缘 / 字段血缘 共用工具栏；切换时调整适用项
+function setMode(mode) {
+  const field = mode === 'field';
+  $('fv-body').hidden = !field;
+  $('back').hidden = !field;
+  $('allWrap').hidden = !field;
+  $('mode').textContent = field ? '字段血缘' : '资源血缘';
+  $('legend').innerHTML = field ? LEGEND_FIELD : LEGEND_NODE;
+  // 字段血缘中只有「卡片」类型可开关，其余类型不适用
+  document.querySelectorAll('#types label').forEach((l) => l.classList.toggle('na', field && l.querySelector('input').value !== 'CARD'));
+  updatePct();
+}
+function updatePct() {
+  $('pct').textContent = Math.round(($('fv-body').hidden ? cy.zoom() : fv.k) * 100) + '%';
+}
+
+gql('{ stats { crawledAt nodes { key count } } }').then(({ stats }) => {
+  $('stats').textContent = `抓取于 ${stats.crawledAt} · ` + stats.nodes.map((n) => `${TYPES[n.key] || n.key} ${n.count}`).join(' · ');
+});
+
+const cy = cytoscape({
+  container: $('cy'),
+  wheelSensitivity: 0.2,
+  style: [
+    // 标签放在节点框内、框随文字自适应，dagre 按真实尺寸排版，避免文字互相重叠
+    { selector: 'node', style: {
+      shape: 'round-rectangle', label: 'data(label)', color: css('--text'), 'font-size': 11,
+      'text-valign': 'center', 'text-halign': 'center', 'text-wrap': 'wrap', 'text-max-width': 170,
+      width: 'label', height: 'label', padding: '7px',
+      'background-color': 'data(color)', 'background-opacity': 0.16, 'border-width': 1.5, 'border-color': 'data(color)' } },
+    { selector: 'node[type="ETL"]', style: { shape: 'cut-rectangle', 'border-style': 'dashed' } },
+    { selector: 'node[type="PAGE"]', style: { shape: 'rectangle', 'border-width': 2 } },
+    { selector: 'node[type="SOURCE"]', style: { shape: 'barrel' } },
+    { selector: 'node.root', style: { 'border-width': 3, 'background-opacity': 0.35, 'font-weight': 'bold' } },
+    { selector: 'node:selected', style: { 'border-width': 3, 'border-color': css('--accent') } },
+    { selector: 'edge', style: {
+      width: 1.2, 'line-color': css('--edge'), 'target-arrow-color': css('--edge'), 'target-arrow-shape': 'triangle',
+      'arrow-scale': 0.8, 'curve-style': 'bezier', label: 'data(rel)', 'font-size': 7, color: css('--muted'),
+      'text-rotation': 'autorotate', 'text-opacity': 0 } },
+    { selector: 'edge:selected, node:selected ~ edge', style: { 'text-opacity': 1 } },
+    { selector: 'node[type="FIELD"]', style: { 'text-max-width': 200 } },
+    { selector: 'edge[kind="derived"], edge[kind="calc"]', style: { 'line-style': 'dashed' } },
+    { selector: 'edge[kind="view"]', style: { 'line-style': 'dotted' } },
+    { selector: '.faded', style: { opacity: 0.15 } },
+  ],
+});
+
+function selectedTypes() {
+  return [...document.querySelectorAll('#types input:checked')].map((i) => i.value);
+}
+
+async function draw(id, field) {
+  current = { kind: 'node', id };
+  setMode('node');
+  const types = selectedTypes();
+  $('status').textContent = '加载中…';
+  const { lineage } = await gql(`query($id: ID!, $d: Direction, $n: Int, $t: [NodeType!]) {
+    lineage(id: $id, direction: $d, depth: $n, types: $t) {
+      root { id name } nodes { id type subtype name path } edges { rel src { id } dst { id } } } }`,
+    { id, d: $('dir').value, n: Number($('depth').value), t: types.length ? types : null });
+  if (!lineage.root) { $('status').textContent = '节点不存在'; return; }
+  // 隐藏卡片时，数据集与页面之间靠 USED_BY_PAGE 边相连
+  const keep = new Set(lineage.nodes.map((n) => n.id));
+  const edges = lineage.edges.map((e) => ({ s: e.src.id, t: e.dst.id, rel: e.rel }));
+  const els = [
+    ...lineage.nodes.map((n) => ({ data: { id: n.id, label: n.name || n.id, type: n.type, color: color(n.type) }, classes: n.id === id ? 'root' : '' })),
+    ...edges.filter((e) => keep.has(e.s) && keep.has(e.t)).map((e) => ({ data: { id: `${e.s}|${e.t}|${e.rel}`, source: e.s, target: e.t, rel: e.rel } })),
+  ];
+  cy.elements().remove();
+  cy.add(els);
+  cy.layout({ name: 'dagre', rankDir: 'LR', nodeSep: 14, rankSep: 70, edgeSep: 6, animate: false }).run();
+  cy.fit(undefined, 30);
+  $('status').textContent = `${lineage.nodes.length} 个节点 · ${els.length - lineage.nodes.length} 条边` + (lineage.nodes.length > 400 ? '（节点较多，可降低深度或取消「卡片」）' : '');
+  $('title').textContent = lineage.root.name || '';
+  updatePct();
+  // 属性默认不显示；抽屉已打开时同步为新的中心节点
+  if ($('drawer').classList.contains('open')) showDetail(id, field);
+}
+
+// 抽屉从工具栏下方开始，不遮挡工具栏
+function openDrawer() {
+  $('drawer').style.top = document.querySelector('.bar2').getBoundingClientRect().bottom + 'px';
+  $('drawer').classList.add('open');
+}
+function closeDrawer() { $('drawer').classList.remove('open'); }
+$('closeDrawer').onclick = closeDrawer;
+
+async function showDetail(id, field) {
+  openDrawer();
+  try {
+    await renderDetail(id, field);
+  } catch (e) {
+    $('detail').innerHTML = `<p style="color:#dc2626">加载详情失败：${esc(e.message)}</p><p class="muted">如刚更新过代码，请重启 server.mjs 后刷新页面。</p>`;
+  }
+}
+
+async function renderDetail(id, field) {
+  const { node: n } = await gql(`query($id: ID!) { node(id: $id) { id type subtype name path props crawledAt
+    fields { name fdType metaType calcType expr annotation hidden }
+    usedFields { transform dst { name } src { name fdType dataset { id type name } } }
+    pages: downstream(types: [PAGE]) { id name } } }`, { id });
+  if (!n) return;
+  let props = '';
+  try { props = JSON.stringify(JSON.parse(n.props || '{}'), null, 2); } catch { props = n.props || ''; }
+  $('detail').innerHTML = `
+    <h1><span class="tag" style="background:${color(n.type)}">${TYPES[n.type] || n.type}</span>${esc(n.name || '')}</h1>
+    <dl class="meta"><dt>ID</dt><dd class="mono">${n.id}</dd><dt>类型</dt><dd>${n.subtype || '-'}</dd>
+      ${n.path ? `<dt>路径</dt><dd>${esc(n.path)}</dd>` : ''}
+      ${n.type === 'CARD' && n.pages.length ? `<dt>所在页面</dt><dd>${n.pages.map((p) => `<a href="#" class="cf-page" data-id="${p.id}">${esc(p.name || p.id)}</a>`).join('、')}</dd>` : ''}</dl>
+    <button id="center">以此为中心展开</button>
+    ${n.fields.length ? `<label>字段（${n.fields.length}）· 点击字段查看字段血缘</label>
+      <input id="fdkw" placeholder="过滤字段名 / 注释" value="${esc(field || '')}">
+      <div class="fdwrap cf-group">
+      ${n.fields.map((f) => `<div class="cf-item fd-item${field && f.name === field ? ' hit' : ''}" data-f="${esc(f.name)}" data-k="${esc((f.name || '') + ' ' + (f.annotation || '')).toLowerCase()}">
+        <div class="cf-top">
+          <span class="cf-name">${esc(f.name)}${f.hidden ? ' <span class="muted">(隐藏)</span>' : ''}</span>
+          <span class="fd-tags">${f.calcType && f.calcType !== 'normal' ? '<span class="cf-zone calc">计算</span>' : ''}<span class="cf-zone">${f.fdType || ''} · ${f.metaType === 'METRIC' ? '度量' : '维度'}</span></span>
+        </div>
+        ${f.annotation ? `<div class="pm fd-note">${esc(f.annotation)}</div>` : ''}
+        ${f.expr ? `<div class="cf-expr" title="点击展开 / 收起">${esc(f.expr)}</div>` : ''}
+      </div>`).join('')}
+      </div>` : ''}
+    ${n.usedFields.length ? cardFieldsHtml(n.usedFields) : ''}
+    <details class="props"><summary>属性</summary><pre>${esc(props)}</pre></details>`;
+  $('center').onclick = () => draw(n.id);
+  const fdkw = $('fdkw');
+  if (fdkw) {
+    const filter = () => {
+      const k = fdkw.value.trim().toLowerCase();
+      $('detail').querySelectorAll('.fd-item').forEach((it) => (it.style.display = !k || it.dataset.k.includes(k) ? '' : 'none'));
+    };
+    fdkw.oninput = filter;
+    filter();
+  }
+  $('detail').querySelector('.fd-item.hit')?.scrollIntoView({ block: 'center' });
+  $('detail').querySelectorAll('.fd-item').forEach((it) => (it.onclick = (ev) => { if (!ev.target.closest('.cf-expr')) drawField(n.id, it.dataset.f); }));
+  $('detail').querySelectorAll('.cf-src, .cf-name.link').forEach((el) => (el.onclick = (ev) => { ev.preventDefault(); drawField(el.dataset.ds, el.dataset.f); }));
+  $('detail').querySelectorAll('.cf-expr').forEach((el) => (el.onclick = () => el.classList.toggle('open')));
+  $('detail').querySelectorAll('.cf-page').forEach((el) => (el.onclick = (ev) => { ev.preventDefault(); draw(el.dataset.id); }));
+  $('detail').querySelectorAll('.cf-ds').forEach((el) => (el.onclick = () => draw(el.dataset.ds)));
+}
+
+// 卡片使用的字段，按来源数据集分组；卡片计算字段引用多个字段时合并为一项，列出各来源
+const AGG = /^(SUM|AVG|MAX|MIN|CNT|CNT_DISTINCT|COUNT|MEDIAN|STDDEV|VAR|NUL)$/;
+function splitZone(t) {
+  // transform 形如「度量 · SUM」或「度量 · <卡片计算公式>」
+  const parts = (t || '').split(' · ');
+  const zone = [parts.shift()];
+  if (parts.length && AGG.test(parts[0])) zone.push(parts.shift());
+  return { zone: zone.filter(Boolean).join(' · '), expr: parts.join(' · ') };
+}
+function cardFieldsHtml(used) {
+  const groups = new Map();
+  for (const e of used) {
+    const d = e.src.dataset;
+    if (!d) continue;
+    if (!groups.has(d.id)) groups.set(d.id, { d, rows: new Map() });
+    const rows = groups.get(d.id).rows;
+    if (!rows.has(e.dst.name)) rows.set(e.dst.name, { name: e.dst.name, ...splitZone(e.transform), srcs: [] });
+    const row = rows.get(e.dst.name);
+    if (!row.srcs.includes(e.src.name)) row.srcs.push(e.src.name);
+  }
+  const total = [...groups.values()].reduce((n, g) => n + g.rows.size, 0);
+  const item = (ds, r) => {
+    const same = r.srcs.length === 1 && r.srcs[0] === r.name;
+    return `<div class="cf-item">
+      <div class="cf-top">
+        <span class="cf-name${same ? ' link' : ''}" ${same ? `data-ds="${ds}" data-f="${esc(r.name)}" title="查看字段血缘"` : ''}>${esc(r.name)}</span>
+        ${r.zone ? `<span class="cf-zone">${esc(r.zone)}</span>` : ''}
+      </div>
+      ${r.expr ? `<div class="cf-expr" title="点击展开 / 收起">${esc(r.expr)}</div>` : ''}
+      ${same ? '' : `<div class="cf-srcs"><span class="muted">来源</span>${r.srcs.map((f) =>
+        `<a href="#" class="cf-src" data-ds="${ds}" data-f="${esc(f)}" title="查看字段血缘">${esc(f)}</a>`).join('')}</div>`}
+    </div>`;
+  };
+  return `<label>使用字段（${total}，来自 ${groups.size} 个数据集）</label>` + [...groups.values()].map(({ d, rows }) => `
+    <div class="cf-group">
+      <div class="cf-ds" data-ds="${d.id}" title="打开数据集关系图"><span class="tag" style="background:${color(d.type)}">${TYPES[d.type] || d.type}</span>${esc(d.name)}</div>
+      ${[...rows.values()].map((r) => item(d.id, r)).join('')}
+    </div>`).join('');
+}
+
+// ---------------- 字段血缘 ----------------
+const fid = (ds, name) => `${ds}::${name}`;
+const KIND = { direct: '透传', derived: '计算', view: '视图', calc: '计算字段', card: '卡片使用' };
+
+// 表卡片视图：数据集为卡片、字段为行，按上下游分层，SVG 连线连接字段行
+const fv = { ds: null, name: null, graph: null, all: false, moreCards: false };
+const CARD_LIMIT = 12; // 一列卡片过多时折叠
+
+async function drawField(ds, name) {
+  hidePop();
+  current = { kind: 'field', ds, name };
+  fv.ds = ds; fv.name = name; fv.moreCards = false;
+  setMode('field');
+  $('status').textContent = '加载字段血缘…';
+  const { fieldLineage: g } = await gql(`query($ds: ID!, $f: String!, $d: Direction, $n: Int) {
+    fieldLineage(dsId: $ds, name: $f, direction: $d, depth: $n) {
+      fields { name fdType metaType dataset { id type name } }
+      edges { kind transform via { id name } src { name dataset { id } } dst { name dataset { id } } }
+      contextIds } }`,
+    { ds, f: name, d: $('dir').value, n: Number($('depth').value) });
+  fv.graph = g;
+  await renderFieldView();
+}
+
+async function renderFieldView() {
+  const g = fv.graph;
+  const showCards = selectedTypes().includes('CARD');
+  const dsMap = new Map();
+  // 未勾选「卡片」时隐藏卡片；仅服务于卡片计算的「参与计算」字段一并隐藏
+  const hiddenIds = new Set(showCards ? [] : g.fields.filter((f) => f.dataset?.type === 'CARD').map((f) => f.dataset.id));
+  const visibleOut = new Set(g.edges.filter((e) => e.src.dataset && e.dst.dataset && !hiddenIds.has(e.dst.dataset.id))
+    .map((e) => fid(e.src.dataset.id, e.src.name)));
+  const ctxAll = new Set(g.contextIds || []);
+  for (const f of g.fields) {
+    if (!f.dataset || hiddenIds.has(f.dataset.id)) continue;
+    const k = fid(f.dataset.id, f.name);
+    if (ctxAll.has(k) && !visibleOut.has(k)) continue;
+    if (!dsMap.has(f.dataset.id)) dsMap.set(f.dataset.id, { ...f.dataset, fields: new Map() });
+    dsMap.get(f.dataset.id).fields.set(f.name, f);
+  }
+  // 「显示全部字段」：补齐每张卡片的其它字段
+  if (fv.all && dsMap.size) {
+    const ids = [...dsMap.keys()].filter((id) => dsMap.get(id).type !== 'CARD');
+    const q = ids.map((id, i) => `d${i}: node(id: "${id}") { fields { name fdType metaType } }`).join('\n');
+    const r = await gql(`{ ${q} }`);
+    ids.forEach((id, i) => {
+      for (const f of r[`d${i}`]?.fields || []) if (!dsMap.get(id).fields.has(f.name)) dsMap.get(id).fields.set(f.name, f);
+    });
+  }
+  const hiddenCards = hiddenIds.size;
+  const edges = g.edges.filter((e) => e.src.dataset && e.dst.dataset && !hiddenIds.has(e.dst.dataset.id));
+  // 数据集分层：最长路径，根数据集附近对齐
+  const level = new Map([...dsMap.keys()].map((k) => [k, 0]));
+  for (let i = 0; i < dsMap.size; i++) {
+    let changed = false;
+    for (const e of edges) {
+      const a = e.src.dataset.id, b = e.dst.dataset.id;
+      if (a !== b && level.get(b) < level.get(a) + 1) { level.set(b, level.get(a) + 1); changed = true; }
+    }
+    if (!changed) break;
+  }
+  const cols = [];
+  for (const [id, lv] of level) (cols[lv] ??= []).push(id);
+  // 多输入计算字段：跨数据集的计算类输入 ≥2 个时，输入先汇合到 ƒ 节点再连到目标字段
+  // 参与计算的上下文字段：只保留仍有可见去向的（隐藏卡片时，仅服务于卡片计算的输入一并隐藏）
+  const ctx = new Set((g.contextIds || []).filter((k) => edges.some((e) => fid(e.src.dataset.id, e.src.name) === k)));
+  const multi = new Map();
+  for (const e of edges) {
+    if (e.kind === 'direct' || e.kind === 'view') continue;
+    const dk = fid(e.dst.dataset.id, e.dst.name);
+    if (!multi.has(dk)) multi.set(dk, { srcs: new Set(), formula: '', cross: false });
+    const m = multi.get(dk);
+    m.srcs.add(fid(e.src.dataset.id, e.src.name));
+    m.cross ||= e.src.dataset.id !== e.dst.dataset.id;
+    // 卡片边的 transform 为「区域 · 公式」，取公式部分
+    const f = e.kind === 'card' ? splitZone(e.transform).expr : (e.transform || '').replace(/^CALC: /, '');
+    if (f && f.length > m.formula.length) m.formula = f;
+  }
+  for (const [k, m] of multi) if (m.srcs.size < 2) multi.delete(k);
+  fv.multi = multi;
+  fv.junctionInfo = new Map([...multi].map(([k, m]) => [k, { srcs: [...m.srcs], formula: m.formula }]));
+  fv.dsName = new Map([...dsMap].map(([id, d]) => [id, d.name]));
+  // 卡片内字段顺序：链路字段在前，参与计算的上下文字段其次
+  const onPath = new Set(g.fields.filter((f) => f.dataset && !ctx.has(fid(f.dataset.id, f.name))).map((f) => fid(f.dataset.id, f.name)));
+  const rank = (k) => (onPath.has(k) ? 2 : ctx.has(k) ? 1 : 0);
+  const root = fid(fv.ds, fv.name);
+  const html = cols.filter(Boolean).map((col) => {
+    const cards = col.filter((id) => dsMap.get(id).type === 'CARD');
+    const hidden = !fv.moreCards && cards.length > CARD_LIMIT ? new Set(cards.slice(CARD_LIMIT)) : new Set();
+    return `<div class="fv-col">${col.filter((id) => !hidden.has(id)).map((id) => {
+    const d = dsMap.get(id);
+    const fields = [...d.fields.values()].sort((a, b) => rank(fid(id, b.name)) - rank(fid(id, a.name)));
+    return `<div class="fv-card" style="--c:${color(d.type)}">
+      <div class="fv-head" data-ds="${id}" title="单击看详情，双击打开资源血缘">${d.type === 'CARD' ? '<span class="fv-kind">卡片</span>' : ''}${esc(d.name)}</div>
+      ${fields.map((f) => {
+        const k = fid(id, f.name);
+        const m = multi.get(k);
+        return `<div class="fv-row${k === root ? ' root' : ''}${onPath.has(k) ? ' path' : ''}${ctx.has(k) ? ' ctx' : ''}" data-k="${esc(k)}" data-ds="${id}" data-f="${esc(f.name)}"
+          title="${ctx.has(k) ? '参与计算的其它输入（未继续展开）' : ''}">
+          <span>${m ? '<i class="fv-f">ƒ</i>' : ''}${esc(f.name)}</span><span class="fv-t">${ctx.has(k) ? '参与计算' : f.metaType === 'METRIC' ? '度量' : f.fdType || ''}</span></div>`;
+      }).join('')}</div>`;
+  }).join('')}${hidden.size ? `<button class="ghost fv-more">还有 ${hidden.size} 张卡片，展开</button>` : ''}</div>`;
+  }).join('');
+  const box = $('fv-stage');
+  box.innerHTML = `<svg id="fv-svg"></svg><div class="fv-cols">${html}</div>`;
+  box.querySelectorAll('.fv-row').forEach((el) => {
+    // 单击：选中并高亮链路 + 字段浮层；再次单击取消；双击：以它为中心展开
+    el.onclick = (ev) => {
+      if (fv.sel === el.dataset.k) { selectField(null); hidePop(); return; }
+      selectField(el.dataset.k);
+      showFieldDetail(el.dataset.ds, el.dataset.f, ev.clientX, ev.clientY);
+    };
+    el.ondblclick = () => { hidePop(); drawField(el.dataset.ds, el.dataset.f); };
+  });
+  // 资源标题：单击看详情（抽屉），双击切换到它的资源血缘图
+  box.querySelectorAll('.fv-head').forEach((el) => {
+    el.onclick = () => {
+      box.querySelectorAll('.fv-head.sel').forEach((h) => h.classList.remove('sel'));
+      el.classList.add('sel');
+      showDetail(el.dataset.ds);
+    };
+    el.ondblclick = () => { hidePop(); draw(el.dataset.ds); };
+  });
+  box.querySelectorAll('.fv-more').forEach((el) => (el.onclick = () => { fv.moreCards = true; renderFieldView(); }));
+  fv.edges = edges;
+  drawFieldLinks();
+  fv.sel = null;
+  $('title').textContent = `${fv.name} · ${dsMap.get(fv.ds)?.name || ''}`;
+  $('status').textContent = hiddenCards ? `已隐藏 ${hiddenCards} 张卡片（勾选「卡片」显示）` : '';
+  centerRoot();
+}
+
+// ---- 平移 / 缩放：#fv-stage 上做 translate + scale ----
+fv.k = 1; fv.x = 0; fv.y = 0;
+function applyView() {
+  hidePop();
+  $('fv-stage').style.transform = `translate(${fv.x}px, ${fv.y}px) scale(${fv.k})`;
+  updatePct();
+}
+function zoomAt(k, mx, my) {
+  k = Math.min(3, Math.max(0.1, k));
+  fv.x = mx - ((mx - fv.x) * k) / fv.k;
+  fv.y = my - ((my - fv.y) * k) / fv.k;
+  fv.k = k;
+  applyView();
+}
+function centerRoot() {
+  const body = $('fv-body'), stage = $('fv-stage');
+  const r = stage.querySelector('.fv-row.root');
+  if (!r) return fitView();
+  const sb = stage.getBoundingClientRect(), rb = r.getBoundingClientRect();
+  const rx = (rb.left - sb.left + rb.width / 2) / fv.k, ry = (rb.top - sb.top + rb.height / 2) / fv.k;
+  fv.x = body.clientWidth / 2 - rx * fv.k;
+  fv.y = body.clientHeight / 2 - ry * fv.k;
+  applyView();
+}
+function fitView() {
+  const body = $('fv-body'), stage = $('fv-stage');
+  const w = stage.offsetWidth, h = stage.offsetHeight;
+  fv.k = Math.min(1.5, Math.max(0.1, Math.min(body.clientWidth / w, body.clientHeight / h)));
+  fv.x = (body.clientWidth - w * fv.k) / 2;
+  fv.y = Math.max(0, (body.clientHeight - h * fv.k) / 2);
+  applyView();
+}
+(() => {
+  const body = $('fv-body');
+  let drag = null, moved = false;
+  body.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const b = body.getBoundingClientRect();
+    zoomAt(fv.k * Math.exp(-e.deltaY * 0.0015), e.clientX - b.left, e.clientY - b.top);
+  }, { passive: false });
+  body.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.target.closest('button')) return;
+    drag = { x: e.clientX, y: e.clientY, ox: fv.x, oy: fv.y };
+    moved = false;
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!moved && Math.hypot(dx, dy) < 4) return;
+    moved = true;
+    body.classList.add('dragging');
+    fv.x = drag.ox + dx; fv.y = drag.oy + dy;
+    applyView();
+  });
+  window.addEventListener('pointerup', () => { drag = null; body.classList.remove('dragging'); });
+  // 拖动结束时不触发字段/标题的点击
+  body.addEventListener('click', (e) => { if (moved) { e.stopPropagation(); e.preventDefault(); moved = false; } }, true);
+  // 点空白处取消选中
+  body.addEventListener('click', (e) => {
+    if (e.target.closest('.fv-row, .fv-head, .fv-junc, .fv-link, button')) return;
+    selectField(null);
+    hidePop();
+    closeDrawer();
+    $('fv-stage').querySelectorAll('.fv-head.sel').forEach((h) => h.classList.remove('sel'));
+  });
+})();
+
+// 工具栏缩放按钮：按当前视图分派
+(() => {
+  const isField = () => !$('fv-body').hidden;
+  const mid = () => [$('fv-body').clientWidth / 2, $('fv-body').clientHeight / 2];
+  const cyZoom = (f) => {
+    const c = $('cy');
+    cy.zoom({ level: cy.zoom() * f, renderedPosition: { x: c.clientWidth / 2, y: c.clientHeight / 2 } });
+  };
+  $('zoomIn').onclick = () => (isField() ? zoomAt(fv.k * 1.25, ...mid()) : cyZoom(1.25));
+  $('zoomOut').onclick = () => (isField() ? zoomAt(fv.k / 1.25, ...mid()) : cyZoom(1 / 1.25));
+  $('fit').onclick = () => (isField() ? fitView() : cy.fit(undefined, 30));
+  $('toRoot').onclick = () => (isField() ? centerRoot() : cy.animate({ center: { eles: cy.$('.root') }, duration: 200 }));
+  cy.on('zoom', updatePct);
+})();
+
+function drawFieldLinks() {
+  const box = $('fv-stage'), svg = $('fv-svg');
+  if (!svg) return;
+  const cols = box.querySelector('.fv-cols');
+  const base = cols.getBoundingClientRect();
+  svg.setAttribute('width', cols.offsetWidth);
+  svg.setAttribute('height', cols.offsetHeight);
+  const pos = (k) => {
+    const el = box.querySelector(`.fv-row[data-k="${CSS.escape(k)}"]`);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const z = fv.k; // 视图已缩放，换算回未缩放坐标
+    return { l: (r.left - base.left) / z, r: (r.right - base.left) / z, y: (r.top - base.top + r.height / 2) / z };
+  };
+  const JX = 30; // ƒ 汇合点距目标卡片左缘
+  const junctions = new Map();
+  const links = fv.edges.map((e, i) => {
+    const sk = fid(e.src.dataset.id, e.src.name), dk = fid(e.dst.dataset.id, e.dst.name);
+    const a = pos(sk), b = pos(dk);
+    if (!a || !b) return '';
+    let d;
+    const m = fv.multi?.get(dk);
+    if (e.src.dataset.id === e.dst.dataset.id) {
+      // 同数据集计算字段：卡片右侧小弧线
+      const x = a.r + 4, bend = 26 + Math.min(Math.abs(b.y - a.y) / 6, 30);
+      d = `M${x},${a.y} C${x + bend},${a.y} ${x + bend},${b.y} ${x},${b.y}`;
+    } else if (m && m.cross && e.kind !== 'direct' && e.kind !== 'view') {
+      // 多输入：先汇到 ƒ 节点
+      const jx = b.l - JX;
+      junctions.set(dk, { x: jx, y: b.y, l: b.l });
+      const mx = (a.r + jx) / 2;
+      d = `M${a.r},${a.y} C${mx},${a.y} ${mx},${b.y} ${jx - 8},${b.y}`;
+    } else {
+      const mx = (a.r + b.l) / 2;
+      d = `M${a.r},${a.y} C${mx},${a.y} ${mx},${b.y} ${b.l},${b.y}`;
+    }
+    return `<path class="fv-link ${e.kind}" data-i="${i}" data-s="${esc(sk)}" data-t="${esc(dk)}" d="${d}"></path>`;
+  }).join('');
+  const nodes = [...junctions].map(([dk, j]) => `
+    <path class="fv-link fv-stem" data-s="${esc(dk)}" data-t="${esc(dk)}" d="M${j.x + 8},${j.y} L${j.l},${j.y}"></path>
+    <g class="fv-junc" data-t="${esc(dk)}">
+      <circle cx="${j.x}" cy="${j.y}" r="8"></circle><text x="${j.x}" y="${j.y + 4}" text-anchor="middle">ƒ</text></g>`).join('');
+  svg.innerHTML = links + nodes;
+  svg.querySelectorAll('path.fv-link[data-i]').forEach((pth) => (pth.onclick = (ev) => showLink(Number(pth.dataset.i), ev.clientX, ev.clientY)));
+}
+
+// 选中字段：高亮它在当前图中的全部上游与下游字段、连线和 ƒ 汇合点；k 为 null 时取消
+function selectField(k) {
+  fv.sel = k;
+  const box = $('fv-body');
+  box.classList.toggle('selecting', !!k);
+  box.querySelectorAll('.fv-row.hot, .fv-link.hot, .fv-junc.hot').forEach((e) => e.classList.remove('hot'));
+  if (!k) return;
+  const keys = (e) => [fid(e.src.dataset.id, e.src.name), fid(e.dst.dataset.id, e.dst.name)];
+  const reach = (from, fwd) => {
+    const seen = new Set([from]);
+    const stack = [from];
+    while (stack.length) {
+      const cur = stack.pop();
+      for (const e of fv.edges) {
+        const [a, b] = keys(e);
+        const [x, y] = fwd ? [a, b] : [b, a];
+        if (x === cur && !seen.has(y)) { seen.add(y); stack.push(y); }
+      }
+    }
+    return seen;
+  };
+  const up = reach(k, false), down = reach(k, true);
+  const on = new Set([...up, ...down]);
+  box.querySelectorAll('.fv-row').forEach((r) => on.has(r.dataset.k) && r.classList.add('hot'));
+  box.querySelectorAll('path.fv-link[data-i]').forEach((p) => {
+    const [a, b] = keys(fv.edges[p.dataset.i]);
+    // 边在链路上：两端都在上游集合，或两端都在下游集合
+    if ((up.has(a) && up.has(b)) || (down.has(a) && down.has(b))) p.classList.add('hot');
+  });
+  box.querySelectorAll('.fv-stem, .fv-junc').forEach((e) => on.has(e.dataset.t) && e.classList.add('hot'));
+}
+
+$('back').onclick = () => draw(fv.ds, fv.name);
+$('fv-all').onchange = () => { fv.all = $('fv-all').checked; if (fv.graph) renderFieldView(); };
+
+window.addEventListener('resize', () => { if (!$('fv-body').hidden) drawFieldLinks(); });
+
+// ---- 轻浮层 ----
+function showPop(html, x, y) {
+  const p = $('pop');
+  p.innerHTML = html;
+  p.hidden = false;
+  const w = p.offsetWidth, h = p.offsetHeight;
+  p.style.left = Math.max(8, Math.min(x + 12, innerWidth - w - 8)) + 'px';
+  p.style.top = Math.max(8, y + 12 + h > innerHeight - 8 ? y - h - 12 : y + 12) + 'px';
+  return p;
+}
+function hidePop() { $('pop').hidden = true; }
+document.addEventListener('pointerdown', (e) => { if (!$('pop').hidden && !e.target.closest('#pop')) hidePop(); }, true);
+
+// 计算说明：「步骤1 → 步骤2」拆成编号步骤，去掉 CALC: 前缀
+function stepsHtml(t) {
+  const parts = (t || '').split(' → ').map((x) => x.replace(/^CALC: /, '').trim()).filter(Boolean);
+  if (!parts.length) return '';
+  const one = (x) => {
+    const m = x.match(/^SQL\[(.*?)\](?:: ([\s\S]*))?$/);
+    if (m) return `<div class="pm">SQL 算子「${esc(m[1].split('|')[0])}」${m[2] ? '' : '（整段 SQL 推导，见下方完整 SQL）'}</div>${m[2] ? `<div class="code">${esc(m[2])}</div>` : ''}`;
+    return `<div class="code">${esc(x)}</div>`;
+  };
+  if (parts.length === 1) return one(parts[0]);
+  return `<ol class="steps">${parts.map((x) => `<li>${one(x)}</li>`).join('')}</ol>`;
+}
+
+// 计算过程中涉及 SQL 算子时，按需加载所在 ETL 的完整 SQL（可展开）
+async function appendSql(p, edges) {
+  const want = new Map(); // etlId -> { name, nodes:Set }
+  for (const e of edges) {
+    if (!e.via || !/SQL\[/.test(e.transform || '')) continue;
+    const nodes = [...(e.transform.matchAll(/SQL\[(.*?)\]/g))].map((m) => m[1].split('|').pop());
+    if (!want.has(e.via.id)) want.set(e.via.id, { name: e.via.name, nodes: new Set() });
+    nodes.forEach((n) => want.get(e.via.id).nodes.add(n));
+  }
+  if (!want.size) return;
+  const ids = [...want.keys()];
+  const r = await gql(`{ ${ids.map((id, i) => `e${i}: node(id: "${id}") { sqlScripts { id name sql } }`).join(' ')} }`);
+  if (p.hidden) return;
+  const html = ids.flatMap((id, i) => {
+    const w = want.get(id);
+    const scripts = (r[`e${i}`]?.sqlScripts || []).filter((x) => w.nodes.has(x.id));
+    return scripts.map((x) => `<details class="sql"><summary>完整 SQL · ${esc(w.name)} · ${esc(x.name)}</summary><div class="code">${esc(x.sql)}</div></details>`);
+  }).join('');
+  if (html) p.insertAdjacentHTML('beforeend', html);
+}
+const chip = (ds, f, label) => `<a href="#" class="cf-src" data-ds="${ds}" data-f="${esc(f)}" title="以此字段为中心展开">${esc(label || f)}</a>`;
+function bindPopChips(p) {
+  p.querySelectorAll('.cf-src').forEach((a) => (a.onclick = (ev) => { ev.preventDefault(); hidePop(); drawField(a.dataset.ds, a.dataset.f); }));
+}
+
+// 统一的「字段说明」浮层：点字段、点 ƒ、点连线都显示目标字段的说明
+// hl：点连线时高亮对应的输入字段（"ds::name"）
+async function showFieldDetail(ds, name, x = innerWidth / 2, y = innerHeight / 3, hl = null) {
+  showPop('<span class="muted">加载中…</span>', x, y);
+  try {
+    const { field: f } = await gql(`query($ds: ID!, $f: String!) { field(dsId: $ds, name: $f) {
+      name physName fdType metaType calcType expr annotation dataset { id type name path }
+      upstream { kind transform via { id name } src { name dataset { id name } } } } }`, { ds, f: name });
+    const isCard = f.dataset?.type === 'CARD';
+    const isRoot = current?.kind === 'field' && current.ds === ds && current.name === name;
+    const p = showPop(`
+      <div class="ph">${f.calcType && f.calcType !== 'normal' || (f.upstream || []).some((e) => e.kind !== 'direct' && e.kind !== 'view') ? '<span class="fv-f">ƒ</span>' : ''}${esc(f.name)}</div>
+      <div class="pm"><span class="tag" style="background:${color(isCard ? 'CARD' : 'DATASET')}">${isCard ? '卡片' : '数据集'}</span>${esc(f.dataset?.name || ds)}</div>
+      <dl class="meta">
+        ${f.fdType ? `<dt>类型</dt><dd>${f.fdType} · ${f.metaType === 'METRIC' ? '度量' : '维度'}${f.calcType && f.calcType !== 'normal' ? ' · 计算字段' : ''}</dd>` : ''}
+        ${f.physName && f.physName !== f.name ? `<dt>物理名</dt><dd class="mono">${esc(f.physName)}</dd>` : ''}
+        ${f.annotation ? `<dt>注释</dt><dd>${esc(f.annotation)}</dd>` : ''}
+      </dl>
+      ${explainHtml(f, hl)}
+      <div class="acts">
+        ${isRoot ? '' : '<button id="popCenter">以此为中心</button>'}
+        <button class="ghost" id="popDs">${isCard ? '卡片' : '数据集'}关系图</button>
+      </div>`, x, y);
+    if ($('popCenter')) $('popCenter').onclick = () => { hidePop(); drawField(ds, name); };
+    $('popDs').onclick = () => { hidePop(); draw(ds); showDetail(ds, name); };
+    bindPopChips(p);
+    appendSql(p, f.upstream);
+  } catch (e) {
+    showPop(`<span style="color:#dc2626">加载失败：${esc(e.message)}</span>`, x, y);
+  }
+}
+
+// 计算说明：同一处计算（经由 + 类型 + 区域 + 公式/步骤相同）合并为一组，输入字段一次列出，步骤只显示一次
+function explainHtml(f, hl) {
+  const ups = (f.upstream || []).filter((e) => e.src?.dataset);
+  if (!ups.length) {
+    return f.expr ? `<div class="sec">计算说明</div><div class="code">${esc(f.expr)}</div>` : '<div class="sec">计算说明</div><div class="pm">源头字段，无上游</div>';
+  }
+  const groups = new Map();
+  for (const e of ups) {
+    const z = e.kind === 'card' ? splitZone(e.transform) : { zone: '', expr: e.transform || '' };
+    const key = [e.via?.id || '', e.kind, z.zone, z.expr].join('\u0000');
+    if (!groups.has(key)) groups.set(key, { e, zone: z.zone, steps: z.expr, srcs: [] });
+    groups.get(key).srcs.push(e.src);
+  }
+  const multi = groups.size > 1;
+  return `<div class="sec">计算说明${multi ? `<span class="muted">（${groups.size} 处来源）</span>` : ''}</div>` + [...groups.values()].map((g, i) => {
+    const { e } = g;
+    const where = e.via ? `${e.kind === 'card' ? '页面' : 'ETL'}：${esc(e.via.name)}` : e.kind === 'calc' ? '数据集计算字段' : e.kind === 'view' ? '视图' : '';
+    return `<div class="calc-src">
+      <div class="pm">${multi ? `${i + 1}. ` : ''}<span class="cf-zone">${KIND[e.kind] || e.kind}${g.zone ? ' · ' + esc(g.zone) : ''}</span> ${where}</div>
+      <div class="chips"><span class="pm">输入</span>${g.srcs.map((s) => {
+        const k = fid(s.dataset.id, s.name);
+        return chip(s.dataset.id, s.name, `${s.name} · ${s.dataset.name}`).replace('class="cf-src"', `class="cf-src${hl === k ? ' hl' : ''}"`);
+      }).join('')}</div>
+      ${g.steps ? stepsHtml(g.steps) : f.expr && e.kind === 'calc' ? `<div class="code">${esc(f.expr)}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+// 连线：显示目标字段的说明（ƒ 汇合点仅作标记，不响应点击）
+function showLink(i, x, y) {
+  const e = fv.edges[i];
+  if (e) showFieldDetail(e.dst.dataset.id, e.dst.name, x, y, fid(e.src.dataset.id, e.src.name));
+}
+
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+cy.on('tap', 'node', (e) => {
+  const n = e.target;
+  cy.elements().addClass('faded');
+  n.closedNeighborhood().removeClass('faded');
+  if (n.data('type') === 'FIELD') showFieldDetail(n.data('ds'), n.data('fname'));
+  else showDetail(n.id());
+});
+// 点击空白处：取消高亮并关闭属性抽屉
+cy.on('tap', (e) => {
+  if (e.target !== cy) return;
+  cy.elements().removeClass('faded');
+  cy.nodes().unselect();
+  closeDrawer();
+});
+cy.on('dbltap', 'node', (e) => {
+  const n = e.target;
+  if (n.data('type') === 'FIELD') drawField(n.data('ds'), n.data('fname'));
+  else draw(n.id());
+});
+
+$('locate').oninput = () => {
+  const k = $('locate').value.trim().toLowerCase();
+  if (!$('fv-body').hidden) return locateField(k);
+  cy.elements().removeClass('faded');
+  if (!k) return;
+  const hit = cy.nodes().filter((n) => (n.data('label') || '').toLowerCase().includes(k));
+  if (!hit.length) return;
+  cy.elements().addClass('faded');
+  hit.closedNeighborhood().removeClass('faded');
+  cy.animate({ fit: { eles: hit, padding: 80 }, duration: 250 });
+  if (hit.length === 1) { cy.nodes().unselect(); hit.select(); }
+};
+
+// 字段视图中定位：高亮匹配的字段行或卡片标题，并移到视图中央
+function locateField(k) {
+  const stage = $('fv-stage');
+  stage.querySelectorAll('.loc').forEach((e) => e.classList.remove('loc'));
+  if (!k) return;
+  const hit = [...stage.querySelectorAll('.fv-row, .fv-head')].filter((e) => e.textContent.toLowerCase().includes(k));
+  if (!hit.length) return;
+  hit.forEach((e) => e.classList.add('loc'));
+  const body = $('fv-body'), sb = stage.getBoundingClientRect(), rb = hit[0].getBoundingClientRect();
+  fv.x = body.clientWidth / 2 - ((rb.left - sb.left + rb.width / 2) / fv.k) * fv.k;
+  fv.y = body.clientHeight / 2 - ((rb.top - sb.top + rb.height / 2) / fv.k) * fv.k;
+  applyView();
+}
+
+let timer;
+async function search() {
+  const kw = $('kw').value.trim();
+  if (!kw) { $('results').innerHTML = ''; return; }
+  if ($('kwType').value === 'FIELD') return searchFields(kw);
+  const { nodes } = await gql(`query($k: String, $t: NodeType) { nodes(keyword: $k, type: $t, limit: 30) { id type name path } }`,
+    { k: kw, t: $('kwType').value || null });
+  $('results').innerHTML = nodes.length ? nodes.map((n) => `<div class="item" data-id="${n.id}">
+    <span class="tag" style="background:${color(n.type)}">${TYPES[n.type] || n.type}</span>${esc(n.name || n.id)}
+    <div class="p">${esc(n.path || n.id)}</div></div>`).join('') : '<p class="muted">无匹配</p>';
+  $('results').querySelectorAll('.item').forEach((el) => (el.onclick = () => { $('searchDlg').close(); draw(el.dataset.id); }));
+}
+async function searchFields(kw) {
+  const { fields } = await gql(`query($k: String!) { fields(name: $k, limit: 200) { name fdType metaType expr dataset { id type name path } } }`, { k: kw });
+  $('results').innerHTML = fields.length ? `<p class="muted">${fields.length >= 200 ? '前 200 条' : fields.length + ' 条'}，点击打开字段血缘</p>` +
+    fields.filter((f) => f.dataset).map((f) => `<div class="item" data-id="${f.dataset.id}" data-f="${esc(f.name)}">
+      <span class="tag" style="background:${color('DATASET')}">字段</span><b>${esc(f.name)}</b> <span class="muted">${f.fdType || ''}</span>
+      <div class="p">${esc(f.dataset.name || f.dataset.id)}${f.expr ? ' · ' + esc(f.expr) : ''}</div></div>`).join('') : '<p class="muted">无匹配</p>';
+  $('results').querySelectorAll('.item').forEach((el) => (el.onclick = () => { $('searchDlg').close(); drawField(el.dataset.id, el.dataset.f); }));
+}
+$('kw').oninput = () => { clearTimeout(timer); timer = setTimeout(search, 250); };
+$('kwType').onchange = search;
+
+function openSearch() {
+  // 在字段视图中默认搜字段
+  if (!$('searchDlg').open) {
+    if (current?.kind === 'field' && !$('kw').value) $('kwType').value = 'FIELD';
+    $('searchDlg').showModal();
+  }
+  $('kw').focus();
+  $('kw').select();
+}
+$('openSearch').onclick = openSearch;
+// 点击弹窗外的遮罩关闭
+document.querySelectorAll('dialog').forEach((d) => d.addEventListener('click', (e) => { if (e.target === d) d.close(); }));
+document.addEventListener('keydown', (e) => {
+  const typing = /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName);
+  if ((e.key === '/' && !typing) || (e.key === 'k' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); openSearch(); }
+  else if (e.key === 'Escape' && (!$('pop').hidden || fv.sel)) { hidePop(); selectField(null); }
+  else if (e.key === 'Escape' && !document.querySelector('dialog[open]')) closeDrawer();
+});
+// 方向 / 深度 / 节点类型：两种视图共用，改动后重绘当前视图
+const redraw = () => {
+  if (current?.kind === 'field') drawField(current.ds, current.name);
+  else if (current) draw(current.id);
+};
+$('depth').oninput = () => ($('depthV').textContent = $('depth').value);
+$('depth').onchange = redraw;
+$('dir').onchange = redraw;
+document.querySelectorAll('#types input').forEach((i) => (i.onchange = () => {
+  // 字段血缘中卡片开关只影响显示，无需重新查询
+  if (current?.kind === 'field') renderFieldView(); else redraw();
+}));
+
+const start = new URLSearchParams(location.search).get('id') || 's132435b02e7a485780fff4c';
+draw(start).catch((e) => ($('status').textContent = e.message));
+</script>
+</body>
+</html>

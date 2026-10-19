@@ -1,0 +1,13 @@
+{
+  "name": "guan-lineage",
+  "version": "0.1.0",
+  "description": "观远 BI 数据集 / ETL / 卡片 / 页面 / 字段血缘：抓取、GraphQL、关系图页面与 CLI",
+  "type": "module",
+  "bin": { "guanlineage": "bin/guanlineage.mjs" },
+  "scripts": {
+    "crawl": "node bin/guanlineage.mjs crawl",
+    "serve": "node bin/guanlineage.mjs serve"
+  },
+  "engines": { "node": ">=22.13" },
+  "dependencies": { "graphql": "16.9.0" }
+}
