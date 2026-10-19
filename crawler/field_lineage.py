@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -354,6 +355,25 @@ def prune_selector_only_pages(db, page_dir):
             n += db.execute("DELETE FROM edges WHERE src = ? AND dst = ? AND rel = 'USED_BY_PAGE'",
                             (ds, page.get("pgId") or p.stem)).rowcount
     return n
+DRAFT = "%\\_draft"  # LIKE 模式：页面草稿 ID 以 _draft 结尾
+
+
+def prune_drafts(db):
+    """删除页面草稿及只出现在草稿中的卡片。
+
+    草稿是正式页面的副本，卡片 ID 与正式版全部不同；「数据集 -> 卡片」接口不区分草稿，
+    不清理会在图中出现成对的重复卡片，且这些卡片没有字段血缘（build_card_edges 不解析草稿）。
+    """
+    draft_cards = [r[0] for r in db.execute(f"""
+      SELECT DISTINCT src FROM edges e WHERE rel = 'ON_PAGE' AND dst LIKE '{DRAFT}' ESCAPE '\\'
+        AND NOT EXISTS (SELECT 1 FROM edges o WHERE o.src = e.src AND o.rel = 'ON_PAGE' AND o.dst NOT LIKE '{DRAFT}' ESCAPE '\\')""")]
+    db.executemany("DELETE FROM edges WHERE src = ? OR dst = ?", [(c, c) for c in draft_cards])
+    db.executemany("DELETE FROM nodes WHERE id = ? AND type = 'CARD'", [(c,) for c in draft_cards])
+    db.execute(f"DELETE FROM edges WHERE src LIKE '{DRAFT}' ESCAPE '\\' OR dst LIKE '{DRAFT}' ESCAPE '\\'")
+    pages = db.execute(f"DELETE FROM nodes WHERE type = 'PAGE' AND id LIKE '{DRAFT}' ESCAPE '\\'").rowcount
+    return pages, len(draft_cards)
+
+
 ZONE = {"row": "行/维度", "column": "列", "metric": "度量", "filters": "筛选", "xAxis": "X 轴", "yAxis": "Y 轴",
         "metric_additional": "辅助度量", "sorting": "排序", "tooltip": "提示", "colorBy": "颜色", "summary": "汇总",
         "mainAxis": "主轴", "baseAxis": "基准轴", "condition": "条件格式"}
@@ -467,6 +487,9 @@ def build(db_path, cache_dir, page_dir=None):
     if page_dir.exists():
         build_card_edges(db, page_dir, ds_fields)
         prune_selector_only_pages(db, page_dir)
+    pages, cards = prune_drafts(db)
+    if pages or cards:
+        print(f"  剔除页面草稿 {pages} 个、仅属于草稿的卡片 {cards} 张", file=sys.stderr)
     # 视图数据集：同名字段对应
     db.execute("""
       INSERT OR IGNORE INTO field_edges

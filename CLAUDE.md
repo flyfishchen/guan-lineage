@@ -39,7 +39,7 @@ guanlineage stats && guanlineage explain s132435b02e7a485780fff4c 集采/地采 
 - 字段以「数据集 ID + 展示名」标识；展示名 = 别名优先，ETL 中按展示名引用。
 - `field_edges.kind`：`direct` 透传（原样 / 改名 / 仅行筛选 / 分组维度，值未变）；`derived` 计算（聚合、公式、空值/值替换、行列转换、合并列、SQL 表达式）——判定见 `kind_of()`，筛选与改名只作为说明记入 `transform`，不改变判定；`calc` 数据集计算字段；`view`；`card`（`dst_ds` 为卡片，`via` 为页面，`transform` 为「区域 · 聚合 · 卡片公式」）。
 - `transform` 为以 ` → ` 连接的步骤；SQL 步骤格式 `SQL[节点名|节点ID]: 列表达式`，页面与 CLI 都按此解析，改格式需同步 `ui.html` 的 `stepsHtml/appendSql` 与 CLI 的 `explain`。
-- 选择器类卡片（SELECTOR / TREE_SELECTOR / MERGE_SELECTOR）不纳入血缘；页面草稿 `_draft` 不计。
+- 选择器类卡片（SELECTOR / TREE_SELECTOR / MERGE_SELECTOR）不纳入血缘；页面草稿 `_draft`（正式页的副本，卡片 ID 全部不同）不计：`prune_drafts()` 在推导字段血缘末尾删除草稿页及只属于草稿的卡片。
 
 ## 注意事项
 
