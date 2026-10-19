@@ -2,11 +2,12 @@
 #
 #   双击 install.cmd，或在 PowerShell 中：  .\install.ps1 [-Crawl] [-NoSkill]
 #   -Crawl    安装后立即全量抓取（约 8 分钟，只读）
+#   -ProjectSkill  AI skill 只装到本项目（.claude\skills 等，目录联接，不入 git）
 #   -NoSkill  不安装 AI skill
 #
 # 不会自动安装 Node / Python，缺失时给出安装提示。
 # 注意：本文件须保存为 UTF-8 with BOM，否则 Windows PowerShell 5.1 会把中文读成乱码。
-param([switch]$Crawl, [switch]$NoSkill)
+param([switch]$Crawl, [switch]$NoSkill, [switch]$ProjectSkill)
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -73,7 +74,8 @@ if ($NoSkill) {
   Ok '已跳过（-NoSkill）'
 } else {
   # 直接用仓库内的 CLI，不依赖 PATH；失败不影响主程序使用
-  node bin/guanlineage.mjs install-skill | ForEach-Object { "  $_" }
+  $scope = if ($ProjectSkill) { @('--project') } else { @() }
+  node bin/guanlineage.mjs install-skill @scope | ForEach-Object { "  $_" }
   if ($LASTEXITCODE -ne 0) { Warn 'AI skill 安装失败，可稍后运行 guanlineage install-skill 重试' }
 }
 

@@ -3,6 +3,7 @@
 #
 #   ./install.sh              检查环境 → npm install → npm link → 自检 → 安装 AI skill
 #   ./install.sh --crawl      安装后立即全量抓取（约 8 分钟，只读）
+#   ./install.sh --project-skill   AI skill 只装到本项目（.claude/skills 等，链接方式，不入 git）
 #   ./install.sh --no-skill   不安装 AI skill
 #
 # 不会自动安装 Node / Python（需管理员权限且各发行版方式不同），缺失时给出安装提示。
@@ -15,7 +16,8 @@ for a in "$@"; do
   case "$a" in
     --crawl) CRAWL=1 ;;
     --no-skill) SKILL=0 ;;
-    *) echo "未知参数 $a（可用 --crawl / --no-skill）" >&2; exit 2 ;;
+    --project-skill) SKILL=project ;;
+    *) echo "未知参数 $a（可用 --crawl / --project-skill / --no-skill）" >&2; exit 2 ;;
   esac
 done
 
@@ -85,7 +87,8 @@ if [ "$SKILL" = 0 ]; then
   ok "已跳过（--no-skill）"
 else
   # 直接用仓库内的 CLI，不依赖 PATH；失败不影响主程序使用
-  if out=$(node bin/guanlineage.mjs install-skill 2>&1); then printf '%s\n' "$out" | sed 's/^/  /'
+  [ "$SKILL" = project ] && scope=--project || scope=
+  if out=$(node bin/guanlineage.mjs install-skill $scope 2>&1); then printf '%s\n' "$out" | sed 's/^/  /'
   else printf '%s\n' "$out" | sed 's/^/  /'; warn "AI skill 安装失败，可稍后运行 guanlineage install-skill 重试"; fi
 fi
 

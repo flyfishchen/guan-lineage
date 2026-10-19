@@ -10,8 +10,8 @@
 
 | 系统 | 命令 |
 |---|---|
-| macOS / Linux | `./install.sh`（`--crawl` 装完立即抓取，`--no-skill` 不装 AI skill） |
-| Windows | 双击 `install.cmd`，或 `install.cmd --crawl` / `install.cmd --no-skill` |
+| macOS / Linux | `./install.sh`（`--crawl` 装完立即抓取，`--project-skill` AI skill 只装到本项目，`--no-skill` 不装 AI skill） |
+| Windows | 双击 `install.cmd`，或加参数 `install.cmd --crawl` / `--project-skill` / `--no-skill` |
 
 脚本不会自动安装 Node / Python，缺失时会给出安装命令。手动安装：
 
@@ -66,13 +66,21 @@ guancli status            # 确认「API 连接正常」
 一键安装脚本最后一步会自动安装；也可单独运行：
 
 ```bash
-guanlineage install-skill                     # 安装到本机已安装的全部助手
-guanlineage install-skill --agents claude,codex   # 只装指定助手（未检测到也会创建目录）
+guanlineage install-skill                     # 用户级：安装到本机已安装的全部助手
+guanlineage install-skill --project           # 项目级：只在本项目中打开助手时可用
+guanlineage install-skill --agents claude,codex   # 只装指定助手（未检测到也会创建目录），可与 --project 组合
 guanlineage install-skill --dir <skills 目录>  # 装到任意 skills 目录（其它支持 SKILL.md 的工具）
-guanlineage uninstall-skill                   # 从所有助手中移除
+guanlineage uninstall-skill [--project]       # 从所有助手中移除（用户级 / 项目级）
 ```
 
-| 助手 | `--agents` | 安装位置（用户级） |
+| | 用户级（默认） | 项目级（`--project`） |
+|---|---|---|
+| 位置 | `~/.<助手>/skills/guan-lineage` | 本仓库 `.<助手>/skills/guan-lineage` |
+| 生效范围 | 任意目录下打开助手 | 仅在本项目目录下打开助手 |
+| 方式 | 复制，`SKILL.md` 更新后需重新安装 | 链接（macOS / Linux 相对软链接，Windows 目录联接，均无需管理员权限），改动即时生效 |
+| 版本库 | 不涉及 | 自动写入 `.git/info/exclude`，不出现在 `git status` |
+
+| 助手 | `--agents` | 用户级位置（项目级为仓库下同名目录，如 `.claude/skills/guan-lineage`） |
 |---|---|---|
 | Claude Code | `claude` | `~/.claude/skills/guan-lineage`（`CLAUDE_CONFIG_DIR` 可覆盖） |
 | Codex | `codex` | `~/.codex/skills/guan-lineage`（`CODEX_HOME` 可覆盖） |
@@ -85,7 +93,8 @@ Windows 上 `~` 即 `%USERPROFILE%`。
 
 - **检测方式**：助手的配置目录（如 `~/.claude`）存在即视为已安装。之后才装的助手，重新运行 `guanlineage install-skill` 即可。
 - **生效**：重启助手或新开对话后生效。
-- **更新**：安装方式为复制，`SKILL.md` 更新（如 `git pull` 后）需重新运行 `guanlineage install-skill`。开发者可手动把目标目录软链接到仓库的 `skills/guan-lineage`，`install-skill` 检测到软链接时保持不动。
+- **更新**：用户级为复制，`SKILL.md` 更新（如 `git pull` 后）需重新运行 `guanlineage install-skill`；项目级为链接，无需重装。目标已是指向本仓库的链接时，`install-skill` 保持不动。
+- **只要项目级**：先 `guanlineage uninstall-skill` 移除用户级，再 `guanlineage install-skill --project`；重跑一键安装脚本时加 `--project-skill`，否则会重新装回用户级。
 - **前提**：skill 只是使用说明，助手实际执行的是本机的 `guanlineage` 命令，因此助手须运行在装了本项目的同一台机器上。claude.ai 网页版等在云端执行命令的对话窗口无法使用。
 
 ## 快速开始
@@ -104,7 +113,7 @@ guanlineage stats
 | `rebuild-fields` | 基于缓存的 ETL / 页面配置重算字段血缘（秒级） |
 | `serve [--port 4000] [--host 127.0.0.1]` | 关系图页面与 GraphQL；默认仅本机访问，局域网共享用 `--host 0.0.0.0`（无鉴权） |
 | `stats` | 抓取时间与统计 |
-| `install-skill [--agents a,b] [--dir 目录]` / `uninstall-skill` | 安装 / 移除 AI skill |
+| `install-skill [--project] [--agents a,b] [--dir 目录]` / `uninstall-skill [--project]` | 安装 / 移除 AI skill（默认用户级，`--project` 仅本项目） |
 | `search <关键字> [--type DATASET\|ETL\|CARD\|PAGE\|SOURCE\|FIELD]` | 按名称搜索资源或字段 |
 | `show <资源>` | 资源详情 |
 | `lineage <资源> [--dir up\|down\|both] [--depth 3] [--types DATASET,ETL,PAGE]` | 资源血缘，按层级列出 |

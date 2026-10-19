@@ -23,10 +23,11 @@ const HELP = `guanlineage — 观远 BI 数据集 / ETL / 卡片 / 页面 / 字�
   rebuild-fields                       基于缓存的 ETL / 页面配置重算字段血缘（秒级）
   serve [--port 4000] [--host 127.0.0.1]  启动关系图页面与 GraphQL（/ 与 /graphql）；默认仅本机
   stats                                抓取时间与节点、边、字段统计
-  install-skill [--agents claude,codex] [--dir <目录>]
+  install-skill [--project] [--agents claude,codex] [--dir <目录>]
                                        把 AI skill 安装到本机已安装的助手（Claude Code / Codex / Cursor /
-                                       Gemini CLI / CodeBuddy / WorkBuddy），助手即可在对话中查询血缘
-  uninstall-skill                      从上述助手中移除该 skill
+                                       Gemini CLI / CodeBuddy / WorkBuddy），助手即可在对话中查询血缘；
+                                       默认用户级（~/.<助手>/skills），--project 仅本项目（链接，不入 git）
+  uninstall-skill [--project]          从上述助手中移除该 skill（--project 移除项目级）
 
 资源
   search <关键字> [--type T] [--limit 30]   按名称搜索；T = DATASET|ETL|CARD|PAGE|SOURCE|FIELD
@@ -104,11 +105,12 @@ if (cmd === 'install-skill' || cmd === 'uninstall-skill') {
   const { installSkill, uninstallSkill, AGENTS } = await import('../src/skill.mjs');
   let rs;
   try {
-    rs = cmd === 'install-skill' ? installSkill({ agents: opts.agents, dir: opts.dir }) : uninstallSkill({ dir: opts.dir });
+    const o = { agents: opts.agents, dir: opts.dir, project: !!opts.project };
+    rs = cmd === 'install-skill' ? installSkill(o) : uninstallSkill(o);
   } catch (e) {
     die(e.message);
   }
-  const label = { installed: '已安装', linked: '已软链接到本仓库，跳过', removed: '已移除', failed: '失败' };
+  const label = { installed: '已安装', linked: '已链接', skipped: '已链接到本仓库，跳过', removed: '已移除', failed: '失败' };
   if (asJson) console.log(JSON.stringify(rs, null, 2));
   else if (!rs.length)
     console.log(cmd === 'install-skill'
