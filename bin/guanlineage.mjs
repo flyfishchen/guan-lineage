@@ -30,7 +30,8 @@ const HELP = `guanlineage — 观远 BI 数据集 / ETL / 卡片 / 页面 / 字�
   uninstall-skill [--project]          从上述助手中移除该 skill（--project 移除项目级）
 
 资源
-  search <关键字> [--type T] [--limit 30]   按名称搜索；T = DATASET|ETL|CARD|PAGE|SOURCE|FIELD
+  search <关键字> [--type T] [--limit 30]   按名称搜索；T = DATASET|ETL|CARD|PAGE|SOURCE|FIELD|PARAM
+                                       （PARAM 为全局参数，可省略关键字列出全部）
   show <资源>                         资源详情（类型、路径、字段数、所在页面等）
   lineage <资源> [--dir up|down|both] [--depth 3] [--types DATASET,ETL,PAGE]
                                        资源血缘，按方向与层级列出
@@ -197,9 +198,22 @@ const commands = {
   },
 
   async search() {
-    const kw = pos[0] || die('用法: guanlineage search <关键字> [--type T]');
     const type = opts.type ? String(opts.type).toUpperCase() : null;
-    const limit = Number(opts.limit || 30);
+    // 全局参数可不带关键字，列出全部
+    const kw = pos[0] ?? (type === 'PARAM' ? '' : die('用法: guanlineage search <关键字> [--type T]'));
+    const limit = Number(opts.limit || (type === 'PARAM' ? 500 : 30));
+    if (type === 'PARAM') {
+      const { fields } = await gql(`query($k: String!, $n: Int) { fields(name: $k, dsId: "GLOBAL_PARAMS", limit: $n) {
+        name fdType annotation downstreamCount sqlDatasets { id name } } }`, { k: kw, n: limit });
+      const note = (a) => {
+        const s = (a || '').replace(/^全局参数( · )?/, '');
+        return s ? `  # ${s.length > 60 ? s.slice(0, 59) + '…' : s}` : '';
+      };
+      return out(fields, () => fields.length
+        ? [`全局参数 ${fields.length} 个（字段 = 被多少字段 / 卡片引用，SQL = 查询中使用它的数据集数；详情：guanlineage field 全局参数 <参数> --dir down）`,
+           ...fields.map((f) => `  ${f.name}  ${f.fdType || ''}  字段 ${f.downstreamCount} · SQL ${f.sqlDatasets.length}${note(f.annotation)}`)].join('\n')
+        : '无匹配');
+    }
     if (type === 'FIELD') {
       const { fields } = await gql('query($k: String!, $n: Int) { fields(name: $k, limit: $n) { name fdType metaType expr dataset { id name } } }', { k: kw, n: limit });
       return out(fields, () => fields.map((f) => `${f.name}  ${f.fdType || ''}  ←  ${f.dataset?.name}  [${f.dataset?.id}]${f.expr ? `\n    = ${f.expr}` : ''}`).join('\n') || '无匹配');
@@ -356,12 +370,17 @@ const commands = {
     };
     const ups = edges.filter((e) => up.has(e.t) && up.has(e.s) && !ctx.has(e.s)).sort((a, b) => up.get(a.s) - up.get(b.s));
     const downs = edges.filter((e) => down.has(e.s) && down.has(e.t)).sort((a, b) => down.get(a.t) - down.get(b.t));
-    out({ root: { dataset: r, field: name }, upstream: ups, downstream: downs, context: [...ctx] }, () => [
+    // 全局参数在数据集查询 SQL 中的使用只有资源级关系，单独列出
+    const sqlDs = r.id === 'GLOBAL_PARAMS' && dir !== 'UP'
+      ? (await gql('query($f: String!) { field(dsId: "GLOBAL_PARAMS", name: $f) { sqlDatasets { id name } } }', { f: name })).field.sqlDatasets
+      : [];
+    out({ root: { dataset: r, field: name }, upstream: ups, downstream: downs, context: [...ctx], sqlDatasets: sqlDs }, () => [
       `${name}  @${r.name}`,
       ups.length ? `上游（${ups.length}）` : '上游：无（源头字段）',
       ...ups.map((e) => `  ${String(up.get(e.s)).padStart(2)} 层  ${fmt(e, 'src')}  →  ${e.dst.name}`),
       downs.length ? `下游（${downs.length}）` : '下游：无',
       ...downs.map((e) => `  ${String(down.get(e.t)).padStart(2)} 层  ${e.src.name}  →  ${fmt(e, 'dst')}`),
+      ...(sqlDs.length ? [`查询 SQL 中使用（${sqlDs.length} 个数据集，参数过滤行，不对应具体字段）`, ...sqlDs.map((d) => `  ${d.name}  [${d.id}]`)] : []),
     ].join('\n'));
   },
 

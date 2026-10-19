@@ -31,7 +31,7 @@ guanlineage stats        # 看「抓取时间」；过旧或刚改过 ETL/页面
 | 字段怎么算的（口径） | `guanlineage explain <数据集或卡片> <字段>` |
 | ETL 里的 SQL | `guanlineage sql <ETL>` |
 | 没有上下游的数据集 | `guanlineage orphans --type DATASET` |
-| 全局参数被哪些字段 / 卡片使用 | `guanlineage field 全局参数 <参数名> --dir down`（参数列表：`guanlineage fields 全局参数`） |
+| 全局参数被哪些字段 / 卡片使用 | `guanlineage field 全局参数 <参数名> --dir down`（找参数：`guanlineage search <关键字> --type PARAM`，省略关键字列出全部） |
 | 失效卡片（引用的数据集 / 字段已不存在） | `guanlineage broken [--reason dataset\|field]` |
 | 其它 | `guanlineage gql '<GraphQL>'`（schema 见 `src/graph.mjs`） |
 

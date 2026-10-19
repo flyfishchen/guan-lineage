@@ -105,6 +105,22 @@ guanlineage serve                 # http://localhost:4000/ 关系图；/graphql 
 guanlineage stats
 ```
 
+## 界面
+
+截图中的数据集、字段名称与公式已做模糊处理。
+
+**资源血缘**：以某个数据集为中心，展开上下游的源表、ETL、数据集、卡片与页面。
+
+![资源血缘](docs/images/resource.png)
+
+**字段血缘**：字段从源表经 ETL 计算，流向下游数据集与卡片。实线表示透传，虚线表示计算，绿线表示卡片使用。
+
+![字段血缘](docs/images/field.png)
+
+**计算说明**：单击字段，查看输入字段、ETL 算子与 SQL 表达式等计算步骤。
+
+![计算说明](docs/images/field-detail.png)
+
 ## CLI
 
 | 命令 | 说明 |
@@ -114,7 +130,7 @@ guanlineage stats
 | `serve [--port 4000] [--host 127.0.0.1]` | 关系图页面与 GraphQL；默认仅本机访问，局域网共享用 `--host 0.0.0.0`（无鉴权） |
 | `stats` | 抓取时间与统计 |
 | `install-skill [--project] [--agents a,b] [--dir 目录]` / `uninstall-skill [--project]` | 安装 / 移除 AI skill（默认用户级，`--project` 仅本项目） |
-| `search <关键字> [--type DATASET\|ETL\|CARD\|PAGE\|SOURCE\|FIELD]` | 按名称搜索资源或字段 |
+| `search <关键字> [--type DATASET\|ETL\|CARD\|PAGE\|SOURCE\|FIELD\|PARAM]` | 按名称搜索资源、字段或全局参数（`--type PARAM` 可省略关键字列出全部，附被字段 / 卡片引用数与查询 SQL 使用数） |
 | `show <资源>` | 资源详情 |
 | `lineage <资源> [--dir up\|down\|both] [--depth 3] [--types DATASET,ETL,PAGE]` | 资源血缘，按层级列出 |
 | `impact <资源> [--depth 10]` | 下游影响分析，按类型汇总 |

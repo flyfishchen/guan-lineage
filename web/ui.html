@@ -139,10 +139,11 @@
   #fv-body[hidden] { display: none; }
   #fv-body.dragging { cursor: grabbing; user-select: none; }
   #fv-stage { position: absolute; left: 0; top: 0; padding: 24px; transform-origin: 0 0; }
-  #fv-svg { position: absolute; left: 24px; top: 24px; overflow: visible; z-index: 2; pointer-events: none; }
+  #fv-svg { position: absolute; left: 24px; top: 24px; overflow: visible; z-index: 0; pointer-events: none; }
   #fv-svg path { pointer-events: stroke; }
   .fv-cols { position: relative; display: flex; gap: 110px; align-items: flex-start; width: max-content; }
   .fv-col { display: flex; flex-direction: column; gap: 18px; }
+  .fv-lv { display: flex; gap: 28px; align-items: flex-start; } /* 同一层表过多时折成多列 */
   .fv-card { width: 230px; background: var(--panel); border: 1px solid var(--border); border-top: 3px solid var(--c); border-radius: 8px; overflow: hidden; position: relative; z-index: 1; }
   .fv-head { padding: 7px 10px; font-weight: 600; font-size: 12px; cursor: pointer; border-bottom: 1px solid var(--border); word-break: break-all; }
   .fv-head:hover { color: var(--accent); }
@@ -161,6 +162,9 @@
   .fv-junc circle { fill: var(--panel); stroke: var(--c-etl); stroke-width: 1.5; }
   .fv-junc text { fill: var(--c-etl); font: italic bold 11px serif; pointer-events: none; }
   .fv-row.loc, .fv-head.loc { outline: 2px solid var(--accent); outline-offset: -2px; }
+  #status.warn { color: var(--c-etl); font-weight: 600; }
+  #status a { color: var(--c-dataset); cursor: pointer; margin-left: 6px; }
+  .fv-plus { color: var(--c-etl); font-size: 10px; margin-left: 4px; border: 1px dashed var(--c-etl); border-radius: 8px; padding: 0 5px; }
   .fv-row.ctx { opacity: 0.7; font-style: italic; box-shadow: inset 2px 0 0 var(--c-etl); }
   .fv-f { color: var(--c-etl); font-weight: bold; margin-right: 4px; font-family: serif; }
   .fv-link { fill: none; stroke: var(--edge); stroke-width: 1.4; pointer-events: stroke; }
@@ -193,6 +197,7 @@
       <label><input type="checkbox" value="PAGE" checked>页面</label>
     </span>
     <label class="opt" id="allWrap" hidden><input type="checkbox" id="fv-all"> 全部字段</label>
+    <label class="opt" id="ctxWrap" hidden title="多输入计算的其它输入字段；字段血缘较大时默认折叠"><input type="checkbox" id="fv-ctx"> 参与计算</label>
     <span class="zoom"><button class="ghost" id="zoomOut" title="缩小">−</button><span id="pct">100%</span><button class="ghost" id="zoomIn" title="放大">+</button><button class="ghost" id="fit" title="适应窗口">适应</button><button class="ghost" id="toRoot" title="回到中心节点">定位</button></span>
     <input id="locate" class="ctl" placeholder="在图中定位…">
   </div>
@@ -207,7 +212,7 @@
 <dialog id="searchDlg">
   <div class="srow">
     <input id="kw" placeholder="名称关键字，如：采购主题明细 / ETL_供应链 / 供应链管理概览" autocomplete="off">
-    <select id="kwType"><option value="">全部资源</option><option value="DATASET">数据集</option><option value="ETL">ETL</option><option value="PAGE">页面</option><option value="CARD">卡片</option><option value="SOURCE">源表</option><option value="FIELD">字段 → 字段血缘</option></select>
+    <select id="kwType"><option value="">全部资源</option><option value="DATASET">数据集</option><option value="ETL">ETL</option><option value="PAGE">页面</option><option value="CARD">卡片</option><option value="SOURCE">源表</option><option value="FIELD">字段 → 字段血缘</option><option value="PARAM">全局参数 → 字段血缘</option></select>
   </div>
   <div id="results"><p class="muted">输入关键字搜索。选「字段」时点结果直接打开该字段的字段血缘。</p></div>
   <div class="sub" id="stats" style="margin: 10px 0 0">加载中…</div>
@@ -241,6 +246,7 @@ function setMode(mode) {
   $('fv-body').hidden = !field;
   $('back').hidden = !field;
   $('allWrap').hidden = !field;
+  $('ctxWrap').hidden = !field;
   $('mode').textContent = field ? '字段血缘' : '资源血缘';
   $('legend').innerHTML = field ? LEGEND_FIELD : LEGEND_NODE;
   // 字段血缘中只有「卡片」类型可开关，其余类型不适用
@@ -422,13 +428,17 @@ const fid = (ds, name) => `${ds}::${name}`;
 const KIND = { direct: '透传', derived: '计算', view: '视图', calc: '计算字段', card: '卡片使用' };
 
 // 表卡片视图：数据集为卡片、字段为行，按上下游分层，SVG 连线连接字段行
-const fv = { ds: null, name: null, graph: null, all: false, moreCards: false };
+const fv = { ds: null, name: null, graph: null, all: false, moreCards: false, ctx: null, depthCap: null };
 const CARD_LIMIT = 12; // 一列卡片过多时折叠
+const COL_WRAP = 10; // 同一层超过此数量的表时折成多列，避免一列过长
+// 大图降噪阈值：根字段直接上下游超过 FANOUT 时默认只显示 1 层；字段或连线超过 FIELDS / EDGES 时默认折叠「参与计算」字段
+const BIG = { FANOUT: 50, FIELDS: 150, EDGES: 300 };
 
 async function drawField(ds, name) {
   hidePop();
   current = { kind: 'field', ds, name };
   fv.ds = ds; fv.name = name; fv.moreCards = false;
+  fv.ctx = null; fv.depthCap = null; // 换中心字段后恢复自动
   setMode('field');
   $('status').textContent = '加载字段血缘…';
   const { fieldLineage: g } = await gql(`query($ds: ID!, $f: String!, $d: Direction, $n: Int) {
@@ -441,15 +451,63 @@ async function drawField(ds, name) {
   await renderFieldView();
 }
 
+// 大图降噪：按层数上限裁剪、按需折叠参与计算字段，返回裁剪后的图与说明
+function declutter(full) {
+  const ctxAll = new Set(full.contextIds || []);
+  const root = fid(fv.ds, fv.name);
+  const ok = (e) => e.src.dataset && e.dst.dataset;
+  const key = (x) => fid(x.dataset.id, x.name);
+  // 层数：沿链路边（不含参与计算字段发出的边）从根字段分别向下游、上游计层
+  const main = full.edges.filter((e) => ok(e) && !ctxAll.has(key(e.src)));
+  const hop = (fwd) => {
+    const lv = new Map([[root, 0]]);
+    let frontier = [root];
+    for (let d = 1; frontier.length; d++) {
+      const next = [];
+      for (const e of main) {
+        const [a, b] = fwd ? [key(e.src), key(e.dst)] : [key(e.dst), key(e.src)];
+        if (frontier.includes(a) && !lv.has(b)) lv.set(b, d), next.push(b);
+      }
+      frontier = next;
+    }
+    return lv;
+  };
+  const down = hop(true), up = hop(false);
+  const maxLv = Math.max(0, ...down.values(), ...up.values());
+  const fanout = main.filter((e) => key(e.src) === root || key(e.dst) === root).length;
+  const cap = fv.depthCap ?? (fanout > BIG.FANOUT && maxLv > 1 ? 1 : Infinity);
+  const inCap = (k) => (down.get(k) ?? Infinity) <= cap || (up.get(k) ?? Infinity) <= cap;
+  let fields = full.fields.filter((f) => f.dataset && (ctxAll.has(key(f)) || inCap(key(f))));
+  let keep = new Set(fields.map(key));
+  let edges = full.edges.filter((e) => ok(e) && keep.has(key(e.src)) && keep.has(key(e.dst)));
+  // 参与计算字段：fv.ctx 为 null 时按规模自动决定
+  const showCtx = fv.ctx ?? !(fields.length > BIG.FIELDS || edges.length > BIG.EDGES);
+  const hiddenInputs = new Map(); // 目标字段 -> 被折叠的参与计算输入数
+  if (!showCtx) {
+    for (const e of edges) if (ctxAll.has(key(e.src)) && !ctxAll.has(key(e.dst))) hiddenInputs.set(key(e.dst), (hiddenInputs.get(key(e.dst)) || 0) + 1);
+    fields = fields.filter((f) => !ctxAll.has(key(f)));
+    keep = new Set(fields.map(key));
+    edges = edges.filter((e) => keep.has(key(e.src)) && keep.has(key(e.dst)));
+  }
+  return {
+    g: { ...full, fields, edges, contextIds: showCtx ? full.contextIds : [] },
+    info: { cap, maxLv, showCtx, hiddenInputs, ctxCount: ctxAll.size },
+  };
+}
+
 async function renderFieldView() {
-  const g = fv.graph;
+  const { g, info } = declutter(fv.graph);
+  fv.declutter = info;
+  $('fv-ctx').checked = info.showCtx;
   const showCards = selectedTypes().includes('CARD');
   const dsMap = new Map();
   // 未勾选「卡片」时隐藏卡片；仅服务于卡片计算的「参与计算」字段一并隐藏
   const hiddenIds = new Set(showCards ? [] : g.fields.filter((f) => f.dataset?.type === 'CARD').map((f) => f.dataset.id));
-  const visibleOut = new Set(g.edges.filter((e) => e.src.dataset && e.dst.dataset && !hiddenIds.has(e.dst.dataset.id))
-    .map((e) => fid(e.src.dataset.id, e.src.name)));
   const ctxAll = new Set(g.contextIds || []);
+  // 参与计算字段只为补全路径字段的多输入计算而加入：须有一条连到可见的非上下文字段的出边才保留
+  // （上下文字段之间互相有边，不能据此保留，否则卡片隐藏后残留一组孤立的「参与计算」字段）
+  const visibleOut = new Set(g.edges.filter((e) => e.src.dataset && e.dst.dataset && !hiddenIds.has(e.dst.dataset.id)
+    && !ctxAll.has(fid(e.dst.dataset.id, e.dst.name))).map((e) => fid(e.src.dataset.id, e.src.name)));
   for (const f of g.fields) {
     if (!f.dataset || hiddenIds.has(f.dataset.id)) continue;
     const k = fid(f.dataset.id, f.name);
@@ -506,7 +564,10 @@ async function renderFieldView() {
   const html = cols.filter(Boolean).map((col) => {
     const cards = col.filter((id) => dsMap.get(id).type === 'CARD');
     const hidden = !fv.moreCards && cards.length > CARD_LIMIT ? new Set(cards.slice(CARD_LIMIT)) : new Set();
-    return `<div class="fv-col">${col.filter((id) => !hidden.has(id)).map((id) => {
+    const shown = col.filter((id) => !hidden.has(id));
+    const chunks = [];
+    for (let i = 0; i < shown.length; i += COL_WRAP) chunks.push(shown.slice(i, i + COL_WRAP));
+    return `<div class="fv-lv">${chunks.map((chunk, ci) => `<div class="fv-col">${chunk.map((id) => {
     const d = dsMap.get(id);
     const fields = [...d.fields.values()].sort((a, b) => rank(fid(id, b.name)) - rank(fid(id, a.name)));
     return `<div class="fv-card" style="--c:${color(d.type)}">
@@ -516,9 +577,9 @@ async function renderFieldView() {
         const m = multi.get(k);
         return `<div class="fv-row${k === root ? ' root' : ''}${onPath.has(k) ? ' path' : ''}${ctx.has(k) ? ' ctx' : ''}" data-k="${esc(k)}" data-ds="${id}" data-f="${esc(f.name)}"
           title="${ctx.has(k) ? '参与计算的其它输入（未继续展开）' : ''}">
-          <span>${m ? '<i class="fv-f">ƒ</i>' : ''}${esc(f.name)}</span><span class="fv-t">${ctx.has(k) ? '参与计算' : f.metaType === 'METRIC' || f.metaType === 'PARAM' ? META_CN(f.metaType) : f.fdType || ''}</span></div>`;
+          <span>${m ? '<i class="fv-f">ƒ</i>' : ''}${esc(f.name)}${info.hiddenInputs.get(k) ? `<span class="fv-plus" title="另有 ${info.hiddenInputs.get(k)} 个参与计算的输入已折叠（勾选工具栏「参与计算」显示）">+${info.hiddenInputs.get(k)}</span>` : ''}</span><span class="fv-t">${ctx.has(k) ? '参与计算' : f.metaType === 'METRIC' || f.metaType === 'PARAM' ? META_CN(f.metaType) : f.fdType || ''}</span></div>`;
       }).join('')}</div>`;
-  }).join('')}${hidden.size ? `<button class="ghost fv-more">还有 ${hidden.size} 张卡片，展开</button>` : ''}</div>`;
+  }).join('')}${ci === chunks.length - 1 && hidden.size ? `<button class="ghost fv-more">还有 ${hidden.size} 张卡片，展开</button>` : ''}</div>`).join('')}</div>`;
   }).join('');
   const box = $('fv-stage');
   box.innerHTML = `<svg id="fv-svg"></svg><div class="fv-cols">${html}</div>`;
@@ -545,7 +606,21 @@ async function renderFieldView() {
   drawFieldLinks();
   fv.sel = null;
   $('title').textContent = `${fv.name} · ${dsMap.get(fv.ds)?.name || ''}`;
-  $('status').textContent = hiddenCards ? `已隐藏 ${hiddenCards} 张卡片（勾选「卡片」显示）` : '';
+  // 根字段的去向全部是卡片（如全局参数）时，隐藏卡片后图中只剩根字段，需明确提示
+  const rootAlone = hiddenCards && !edges.some((e) => fid(e.src.dataset.id, e.src.name) === root || fid(e.dst.dataset.id, e.dst.name) === root);
+  const notes = [];
+  if (rootAlone) notes.push(`该字段的上下游全部是卡片（${hiddenCards} 张），已隐藏——勾选工具栏「卡片」显示`);
+  else if (hiddenCards) notes.push(`已隐藏 ${hiddenCards} 张卡片（勾选「卡片」显示）`);
+  if (info.cap < info.maxLv) notes.push(`引用较多，只显示 ${info.cap} 层（共 ${info.maxLv} 层）<a data-act="more">展开下一层</a><a data-act="all">全部</a>`);
+  if (!info.showCtx && info.ctxCount) notes.push(`已折叠 ${info.ctxCount} 个参与计算字段 <a data-act="ctx">显示</a>`);
+  $('status').innerHTML = notes.join('　·　');
+  $('status').classList.toggle('warn', !!rootAlone);
+  $('status').querySelectorAll('a[data-act]').forEach((a) => (a.onclick = () => {
+    if (a.dataset.act === 'more') fv.depthCap = info.cap + 1;
+    if (a.dataset.act === 'all') fv.depthCap = Infinity;
+    if (a.dataset.act === 'ctx') fv.ctx = true;
+    renderFieldView();
+  }));
   centerRoot();
 }
 
@@ -711,6 +786,7 @@ function selectField(k) {
 
 $('back').onclick = () => draw(fv.ds, fv.name);
 $('fv-all').onchange = () => { fv.all = $('fv-all').checked; if (fv.graph) renderFieldView(); };
+$('fv-ctx').onchange = () => { fv.ctx = $('fv-ctx').checked; if (fv.graph) renderFieldView(); };
 
 window.addEventListener('resize', () => { if (!$('fv-body').hidden) drawFieldLinks(); });
 
@@ -884,6 +960,7 @@ function locateField(k) {
 let timer;
 async function search() {
   const kw = $('kw').value.trim();
+  if ($('kwType').value === 'PARAM') return searchParams(kw);  // 不输入关键字时列出全部参数
   if (!kw) { $('results').innerHTML = ''; return; }
   if ($('kwType').value === 'FIELD') return searchFields(kw);
   const { nodes } = await gql(`query($k: String, $t: NodeType) { nodes(keyword: $k, type: $t, limit: 30) { id type name path } }`,
@@ -900,6 +977,14 @@ async function searchFields(kw) {
       <span class="tag" style="background:${color('DATASET')}">字段</span><b>${esc(f.name)}</b> <span class="muted">${f.fdType || ''}</span>
       <div class="p">${esc(f.dataset.name || f.dataset.id)}${f.expr ? ' · ' + esc(f.expr) : ''}</div></div>`).join('') : '<p class="muted">无匹配</p>';
   $('results').querySelectorAll('.item').forEach((el) => (el.onclick = () => { $('searchDlg').close(); drawField(el.dataset.id, el.dataset.f); }));
+}
+async function searchParams(kw) {
+  const { fields } = await gql(`query($k: String!) { fields(name: $k, dsId: "GLOBAL_PARAMS", limit: 500) { name fdType annotation downstreamCount sqlDatasets { id } } }`, { k: kw });
+  $('results').innerHTML = fields.length ? `<p class="muted">${fields.length} 个全局参数，点击打开字段血缘</p>` +
+    fields.map((f) => `<div class="item" data-f="${esc(f.name)}">
+      <span class="tag" style="background:${color('DATASET')}">参数</span><b>${esc(f.name)}</b> <span class="muted">${f.fdType || ''} · 字段 ${f.downstreamCount} · SQL ${f.sqlDatasets.length}</span>
+      <div class="p">${esc((f.annotation || '').replace(/^全局参数( · )?/, '') || '无默认值')}</div></div>`).join('') : '<p class="muted">无匹配</p>';
+  $('results').querySelectorAll('.item').forEach((el) => (el.onclick = () => { $('searchDlg').close(); drawField('GLOBAL_PARAMS', el.dataset.f); }));
 }
 $('kw').oninput = () => { clearTimeout(timer); timer = setTimeout(search, 250); };
 $('kwType').onchange = search;

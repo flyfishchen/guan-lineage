@@ -386,8 +386,9 @@ def add_params_node(db, params):
         parts = ["全局参数"]
         if d.get("defaultValue") not in (None, ""):
             parts.append(f"默认 {d['defaultValue']}")
-        if d.get("optionValue"):
-            parts.append("可选 " + "/".join(map(str, d["optionValue"][:20])))
+        opts = [str(x) for x in d.get("optionValue") or [] if x not in (None, "")]
+        if opts:
+            parts.append("可选 " + "/".join(opts[:20]))
         return short(" · ".join(parts), 300)
 
     # fd_id 用参数 ID（dpId），没有定义时用参数名
@@ -592,9 +593,17 @@ def build_card_edges(db, page_dir, ds_fields, params):
             # 卡片配置携带所用数据集的查询 SQL：补齐「全局参数 -> 数据集」（旧库的数据集属性中没有 queryParams）
             for info in [content.get("dsInfo"), *(content.get("dsInfos") or [])]:
                 query = (((info or {}).get("config") or {}).get("tableQuery") or {}).get("query") or ""
-                for prm in PARAM_REF.findall(query):
-                    params.setdefault(prm, None)
-                    db.execute("INSERT OR IGNORE INTO edges VALUES (?, ?, 'PARAM_OF')", (PARAMS_DS, info.get("dsId")))
+                found = sorted(set(PARAM_REF.findall(query)))
+                if found and info.get("dsId"):
+                    # 合并进数据集属性 queryParams（与 crawl 写入的格式一致），下方统一建「全局参数 -> 数据集」边
+                    row = db.execute("SELECT props FROM nodes WHERE id = ?", (info["dsId"],)).fetchone()
+                    if row:
+                        props = json.loads(row[0]) if row[0] else {}
+                        merged = sorted(set(props.get("queryParams") or []) | set(found))
+                        if merged != props.get("queryParams"):
+                            props["queryParams"] = merged
+                            db.execute("UPDATE nodes SET props = ? WHERE id = ?",
+                                       (json.dumps(props, ensure_ascii=False), info["dsId"]))
 
             def issue(ds, field, shown, formula, reason):
                 db.execute("INSERT OR IGNORE INTO card_issues VALUES (?,?,?,?,?,?,?,?)",

@@ -64,6 +64,10 @@ export function createGraph({ dbPath = path.join(DATA_DIR, 'lineage.db'), cacheD
       upstream: [FieldEdge!]!
       "直接下游字段（流向哪些字段）"
       downstream: [FieldEdge!]!
+      "直接下游边数（被多少处引用）"
+      downstreamCount: Int!
+      "全局参数：在查询 SQL 中引用该参数的数据集（普通字段为空）"
+      sqlDatasets: [Node!]!
       "多跳字段血缘"
       lineage(direction: Direction = BOTH, depth: Int = 5): FieldGraph!
     }
@@ -141,8 +145,8 @@ export function createGraph({ dbPath = path.join(DATA_DIR, 'lineage.db'), cacheD
       path(from: ID!, to: ID!, maxDepth: Int = 10): [Node!]
       "无上下游的孤立节点（如未被使用的数据集）"
       orphans(type: NodeType = DATASET, limit: Int = 100): [Node!]!
-      "按字段名反查数据集；exact=false 时模糊匹配"
-      fields(name: String!, exact: Boolean = false, limit: Int = 200): [Field!]!
+      "按字段名反查数据集；exact=false 时模糊匹配；dsId 限定数据集（如 GLOBAL_PARAMS 只搜全局参数）"
+      fields(name: String!, exact: Boolean = false, dsId: ID, limit: Int = 200): [Field!]!
       "单个字段（dsId + 字段展示名）"
       field(dsId: ID!, name: String!): Field
       "字段级血缘：direction=UP 追溯字段来源，DOWN 看字段影响"
@@ -181,6 +185,13 @@ export function createGraph({ dbPath = path.join(DATA_DIR, 'lineage.db'), cacheD
     calcType: f.calc_type, expr: f.expr, annotation: f.annotation, hidden: !!f.hidden, dataset: () => getNode(f.ds_id),
     upstream: () => fieldEdges('dst', f.ds_id, f.name),
     downstream: () => fieldEdges('src', f.ds_id, f.name),
+    sqlDatasets: () =>
+      f.ds_id === 'GLOBAL_PARAMS'
+        ? q(`SELECT n.* FROM nodes n, json_each(n.props, '$.queryParams') j
+             WHERE n.type = 'DATASET' AND json_valid(n.props) AND j.value = ? ORDER BY n.name`).all(f.name).map(wrap)
+        : [],
+    downstreamCount: () =>
+      hasFieldEdges ? q('SELECT count(*) c FROM field_edges WHERE src_ds = ? AND src_field = ?').get(f.ds_id, f.name).c : 0,
     lineage: ({ direction, depth }) => fieldLineage({ dsId: f.ds_id, name: f.name, direction, depth }),
   });
   const getField = (ds, name) =>
@@ -344,10 +355,10 @@ export function createGraph({ dbPath = path.join(DATA_DIR, 'lineage.db'), cacheD
            AND NOT EXISTS (SELECT 1 FROM edges WHERE src = n.id)
            AND NOT EXISTS (SELECT 1 FROM edges WHERE dst = n.id)
          ORDER BY name LIMIT ?`).all(type, limit).map(wrap),
-    fields: ({ name, exact, limit }) =>
+    fields: ({ name, exact, dsId, limit }) =>
       hasFields
-        ? q(`SELECT * FROM fields WHERE name ${exact ? '= ?' : 'LIKE ?'} ORDER BY name, ds_id LIMIT ?`)
-            .all(exact ? name : `%${name}%`, Math.min(limit, 2000)).map(fieldObj)
+        ? q(`SELECT * FROM fields WHERE name ${exact ? '= ?' : 'LIKE ?'} AND (? IS NULL OR ds_id = ?) ORDER BY name, ds_id LIMIT ?`)
+            .all(exact ? name : `%${name}%`, dsId ?? null, dsId ?? null, Math.min(limit, 2000)).map(fieldObj)
         : [],
     field: ({ dsId, name }) => fieldObj(getField(dsId, name)),
     fieldLineage,
